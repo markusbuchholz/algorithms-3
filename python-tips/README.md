@@ -2,10 +2,12 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 
 
 - [Chapter 2](#chapter-2-data-structures): **Data Structures.** Overview of data structures, list comprehension, generators, unpacking, sorting, binary search, arrays.
-- [Chapter 3](#chapter-3-dictionaries-and-sets): **Dictionaries and Sets.** Comparison between Dictionaries, Sets, and Lists.
+- [Chapter 3](#chapter-3-dictionaries-and-sets): **Dictionaries and Sets.** Comparison between Dictionaries, Sets, and Lists. Performance evaluation.
 - [Chapter 4](#chapter-4-strings-versus-bytes): **Strings VS Bytes.** How to encode/decode string/bytes.
-- [Chapter 5](#chapter-5-functions-as-first-class-objects): **Functions as first-class objects.** Functional programming, Lambda functions, callable operator, introspection, parameters handling, annotations.
-- [Chapter 7](#chapter-7-function-decorators-and-closures): **Function Decorators and Closures**. Definition, stacked and parameterized decorators, local variables, closures.
+- [Chapter 5](#chapter-5-functions-as-first-class-objects): **Functions as first-class objects.** Functional programming, Lambda functions, callable operator, annotations.
+- [Chapter 7](#chapter-7-function-decorators-and-closures): **Function Decorators and Closures.** Definition, stacked and parameterized decorators, local variables, closures.
+- [Chapter 8](#chapter-8-object-references-mutability-and-recycling): **Object References, Mutability, and Recycling.** Copies and deep copies, garbage collector, parameters as references.
+- [Chapter 9](#chapter-9-pythonic-objects): **Pythonic objects.** Object representations, hashable objects, class private instances, name mangling.
 
 Chapter 2: Data Structures
 ===========================
@@ -34,6 +36,16 @@ Use the method `reversed(my_list)`. For instance:
 my_list=[i for i in range(10)]
 for i in reversed(my_list):
     print(i)
+```
+
+chr() and ord()
+----------------
+
+The built-in function `chr()` turns the input number into a char whereas the function `ord()` does the opposite, turning a given character into its number.
+
+```python
+chr(97) # 'a'
+ord("a") # 97
 ```
 
 Print through repr
@@ -843,6 +855,26 @@ f2(3)
 
 This snippet generates an error. It may seems strange at first, because functions can access variables that have been declared outside their body, like `b=6` in this example. However, when Python compile this code it will see that `b` is present inside the body of `f2()` and by design this means that the variable is local. Note that this is a design choice. The advantage is to avoid overwriting a global variable by mistake inside a function. In other words, when we create a new function we do not have to worry if the variable names we are using internally already exist somewhere. Global variable can be read inside a function but not overwritten.
 
+Note that using the keyword `global` it is possible to avoid this behaviour and directly act on the global variable `b` as follows:
+
+```python
+b = 6
+
+def f2(a):
+    print(a)
+    global b
+    print(b)
+    b = 9
+    
+f2(3)
+# print(a) -> 3
+# print(b) -> 6
+b
+# 9
+```
+
+In the example `global b` is used before any attempt to access `b`. This tells the function that the variable `b` inside the scope is the global one. It follows that every time we modify `b` inside the function we are actually modifying the global `b`.
+
 
 **Closures**
 
@@ -916,6 +948,313 @@ avg.__closure__[0].cell_contents
 # [10, 11, 12]
 ```
 
+
+Chapter 8: Object References, Mutability, and Recycling
+========================================
+
+Difference between `==` and `is`
+--------------------------------
+
+There is a difference between `==` and `is` in Python. The `==` operator compares the values of objects (the data they hold), while `is` compares their identities. We often care about values and not identities, so `==` appears more frequently than `is` in Python code.
+
+Variables in Python are sort of labels and not boxes. Consider an example where we create an object dictionary and assign to it two different labels `alex` and `charles`:
+
+```python
+alex = {'name': 'Charles L. Dodgson', 'born': 1832, 'balance': 950}
+charles = alex
+
+alex == charles # True
+alex is charles # True
+```
+
+Note that both last two lines evaluate to `True`. The objects compare equal when using `==`, because of the `__eq__` implementation in the dict class. The `is` operator is faster than `==`, because it cannot be overloaded. In other words, `a == b` is syntactic sugar for `a.__eq__(b)`. The snippet above is an examples of **aliases**, since `charles` and `alex` are **alias**. Let's consider now a different example where we create a separate object for `charles` but with the same content of `alex`:
+
+```python
+alex = {'name': 'Charles L. Dodgson', 'born': 1832, 'balance': 950}
+charles = {'name': 'Charles L. Dodgson', 'born': 1832, 'balance': 950}
+
+alex == charles # True
+alex is charles # False
+```
+
+The comparison `alex == charles` still evaluates to `True` since the content of the objects is the same. However, the last line `alex is charles` now evaluate to False, since `alex` and `charles` are two different objects.
+
+
+Mutability
+----------
+
+The concept of mutability can be tricky sometimes. Consider **tuples**. Tuples, like most Python collections—lists (dicts, sets, etc.) hold references to objects. If the referenced items are mutable, they may change even if the tuple itself does not. In other words, the immutability of tuples really refers to the physical contents of the tuple data structure (i.e., the references it holds), and does not extend to the referenced objects. Here an example:
+
+```python
+t1 = (1, 2, [30, 40])
+id(t1[-1])
+# 4302515784
+t1[-1].append(99) # (1, 2, [30, 40, 99])
+id(t1[-1])
+# 4302515784
+```
+
+The reference to the list inside the tuple did not change, but the content of the list itself changed. This is because the tuple is keeping references to objects and those references do not change.
+
+
+Copies are shallow by default
+-----------------------------
+
+The easiest way to copy a list (or most built-in mutable collections) is to use the built-in constructor for the type itself. For example:
+
+```python
+l1 = [3, [55, 44], (7, 8, 9)]
+l2 = list(l1) # creates a copy of l1
+l2 == l1
+# True
+l2 is l1
+# False
+```
+
+In this example the copies are equal, but refer to two different objects. For lists and other mutable sequences, the shortcut `l2 = l1[:]` also makes a copy.
+
+IMPORTANT: However, using the constructor `list()` or `[:]` produces a **shallow copy** (i.e., the outermost container is duplicated, but the copy is filled with references to the same items held by the original container). This saves memory and causes no problems if all the items are immutable. But if there are mutable items (e.g. list of lists), this may lead to unpleasant surprises. Consider this example:
+
+
+```python
+l1 = [3, [66, 55, 44], (7, 8, 9)]
+l2 = list(l1) # shallow copy
+
+l1.append(100) # appending 100 to l1 has no effect on l2
+l1[1].remove(55) # removing 55 from l1[1] affects l2
+print('l1:', l1)
+# l1: [3, [66, 44], (7, 8, 9), 100]
+print('l2:', l2)
+# l2: [3, [66, 44], (7, 8, 9)]
+
+l2[1] += [33, 22] # += changes the list in place (affects l1)
+l2[2] += (10, 11) # += on a tuple creates a new tuple (no effect on l1)
+print('l1:', l1)
+# l1: [3, [66, 44, 33, 22], (7, 8, 9), 100]
+print('l2:', l2)
+# l2: [3, [66, 44, 33, 22], (7, 8, 9, 10, 11)]
+```
+
+Deep copies
+------------
+
+The `copy` module provides the `deepcopy` and `copy` functions that return deep and shallow copies of arbitrary objects. Note that making deep copies is not a simple matter in the general case. Objects may have cyclic references that would cause a naïve algorithm to enter an infinite loop. The `deepcopy` function remembers the objects already copied to handle cyclic references
+gracefully. Also, a deep copy may be too deep in some cases. For example, objects may refer to external resources or singletons that should not be copied. You can control the behavior of both copy and deepcopy by implementing the `__copy__()` and `__deepcopy__()` special methods. To illustrate the use of `copy()` and `deepcopy()` consider this example:
+
+```python
+class Bus:
+    def __init__(self, passengers=None):
+        if passengers is None: self.passengers = []
+        else: self.passengers = list(passengers)
+    def pick(self, name):
+        self.passengers.append(name)
+    def drop(self, name):
+        self.passengers.remove(name)
+        
+import copy
+bus1 = Bus(['Alice', 'Bill', 'Claire', 'David'])
+bus2 = copy.copy(bus1)
+bus3 = copy.deepcopy(bus1)
+id(bus1), id(bus2), id(bus3)
+# (4301498296, 4301499416, 4301499752)
+
+bus1.drop('Bill')
+bus2.passengers # ['Alice', 'Claire', 'David']
+id(bus1.passengers), id(bus2.passengers), id(bus3.passengers)
+# (4302658568, 4302658568, 4302657800)
+bus3.passengers # ['Alice', 'Bill', 'Claire', 'David']
+```
+
+
+Function parameters are references
+----------------------------------
+
+The only mode of parameter passing in Python is **call by sharing**. Call by sharing means that each formal parameter of the function gets a copy of each reference in the arguments. In other words, the parameters inside the function become aliases of the actual arguments. The result of this scheme is that a function may change any mutable object passed as a parameter, but it cannot change the identity of those objects (i.e., it cannot altogether replace an object with another). Consider this example:
+
+```python
+def f(a, b):
+    a += b
+    return a
+
+# Numbers are not changed
+x = 1
+y = 2
+f(x, y) # 3
+x, y # (1, 2)
+
+# Lists are changed
+# += changes the list in-place
+a = [1, 2]
+b = [3, 4]
+f(a, b) # [1, 2, 3, 4]
+a, b # ([1, 2, 3, 4], [3, 4])
+
+# Tuples are not changed
+# += create a new tuple
+t = (10, 20)
+u = (30, 40)
+f(t, u) # (10, 20, 30, 40)
+t, u # ((10, 20), (30, 40))
+```
+
+Why you should never have mutables as default parameters
+--------------------------------------------------------
+
+In the example of the bus we wrote `def __init__(self, passengers=None)` initializing the `passengers` list to `None`. Behind this there is a very important reason. You may feel smart, and directly initialize the list to an empty list like `def __init__(self, passengers=[])`. However, this last solution can create big troubles. Consider this example
+
+```python
+class HauntedBus:
+    def __init__(self, passengers=[]):
+        self.passengers = passengers
+    def pick(self, name):
+        self.passengers.append(name)
+    def drop(self, name):
+        self.passengers.remove(name)
+
+bus1 = HauntedBus(['Alice', 'Bill']) # start full, list is passed, no problems
+bus1.passengers # ['Alice', 'Bill']
+bus1.pick('Charlie')
+bus1.drop('Alice')
+bus1.passengers # ['Bill', 'Charlie']
+
+bus2 = HauntedBus() # start empty, passengers==[], problematic
+bus2.pick('Carrie')
+bus2.passengers # ['Carrie']
+
+bus3 = HauntedBus() # start empty and inherit passengers from bus2
+bus3.passengers # ['Carrie']
+bus3.pick('Dave')
+
+bus2.passengers # ['Carrie', 'Dave']
+bus2.passengers is bus3.passengers
+# True
+bus1.passengers # ['Bill', 'Charlie']
+```
+
+The problem is that `HauntedBus` instances that don’t get an initial passenger list end up sharing the same passenger list among themselves! This can be solved by initializing to `None` and assigning a new list inside `__init__`, as we did previously.
+
+Garbage collection and `del`
+-----------------------------
+
+The `del` statement deletes names, not objects. An object may be garbage collected as result of a `del` command, but only if the variable deleted holds the last reference to the object, or if the object becomes unreachable. Rebinding a variable may also cause the number of references to an object to reach zero, causing its destruction. There is a `__del__` special method, but it does not cause the disposal of the instance, and should not be called by your code. The `__del__` is invoked by the Python interpreter when the instance is about to be destroyed to give it a chance to release external resources. You will seldom need to implement `__del__` in your own code, yet some Python beginners spend time coding it for no good reason. In CPython, the primary algorithm for garbage collection is reference counting. Essentially, each object keeps count of how many references point to it. As soon as that `refcount` reaches zero, the object is immediately destroyed: CPython calls the `__del__` method on the object (if defined) and then frees the memory allocated to the object.
+
+Weak References
+---------------
+
+The presence of references is what keeps an object alive in memory. When the reference count of an object reaches zero, the garbage collector disposes of it. But sometimes it is useful to have a reference to an object that does not keep it around longer than necessary. A common use case is a cache. Weak references to an object do not increase its reference count. The object that is the target of a reference is called the referent. Therefore, we say that a weak reference does not prevent the referent from being garbage collected. Weak references are useful in caching applications because you don’t want the cached objects to be kept alive just because they are referenced by the cache. Not every Python object may be the target, or referent, of a weak reference. Basic list and dict instances may not be referents, but a plain subclass of either can solve this problem easily
+
+
+Chapter 9: Pythonic objects
+============================
+
+Object Representations
+-----------------------
+
+Every object-oriented language has at least one standard way of getting a string representation from any object. Python has two:
+
+- `repr()` Return a string representing the object as the developer wants to see it.
+- `str()` Return a string representing the object as the user wants to see it.
+
+As you know, we implement the special methods `__repr__` and `__str__` to support `repr()` and `str()`. There are two additional special methods to support alternative representations of objects: `__bytes__` and `__format__`. The `__bytes__` method is analogous to `__str__`: it’s called by `bytes()` to get the object represented as a byte sequence. Regarding `__format__`, both the built-in function `format()` and the `str.format()` method call it to get string displays of objects using special formatting codes. If you’re coming from Python 2, remember that in Python 3 `__repr__`, `__str__`, and `__format__` must always return Unicodestrings `(type str)`. Only `__bytes__` is supposed to return a byte sequence `(type bytes)`.
+
+
+`classmethod` VS `staticmethod`
+------------------------------
+
+The `classmethod` **decorator** defines a method that operates on the class and not on instances. It changes the way the method is called, so it receives the class itself as the first argument, instead of an instance. Its most common use is for alternative constructors. By convention, the first parameter of a class method should be named `cl`s (but Python doesn’t care how it’s named).
+
+The `staticmethod` **decorator** changes a method so that it receives no special first argument. In essence, a static method is just like a plain function that happens to live in a class body, instead of being defined at the module level. The `classmethod` decorator is clearly useful, but I’ve never seen a compelling use case for `staticmethod`. If you want to define a function that does not interact with the class, just define it in the module.
+
+
+```python
+class Demo:
+    @classmethod
+    def klassmeth(*args):
+         return args
+
+    @staticmethod
+    def statmeth(*args):
+        return args
+
+Demo.klassmeth() # it receives the Demo class as first argument
+# (<class '__main__.Demo'>,)
+Demo.klassmeth('spam')
+# (<class '__main__.Demo'>, 'spam')
+
+Demo.statmeth() # behaves just like a plain old function
+# ()
+Demo.statmeth('spam')
+# ('spam',)
+```
+
+Hashable objects
+----------------
+
+The `__hash__` method should return an `int` and ideally take into account the hashes of the object attributes that are also used in the `__eq__` method, because objects that compare equal should have the same hash. The `__hash__` special method documentation suggests using the bitwise XOR operator `^` to mix the hashes of the components, so that’s what we do. The code for our `Vector2d.__hash__` method is the following:
+
+```python
+def __hash__(self):
+    return hash(self.x) ^ hash(self.y)
+```
+
+It is good norm to protect the instance attributes when the hashing is implemented, however this is not strictly necessary. Implementing `__hash__` and `__eq__` correctly is all it takes. But the hash value of an instance is never supposed to change, if the instance change then the hash change and this is not very good if we want to retrieve the object based on its has value (now changed).
+This provides an excellent opportunity to talk about private properties, which are a way to implement read-only attributes.
+
+
+Class private instances
+--------------
+
+Any identifier of the form `__spam` (at least two leading underscores, at most one trailing underscore) is textually replaced with `_classname__spam`, where `classnam`e is the current class name with leading underscore(s) stripped. This mangling is done without regard to the syntactic position of the identifier, so it can be used to define class-private instance and class variables, methods, variables stored in globals, and even variables stored in instances. Consider this example:
+
+```python
+class Vector:
+    def __init__(self):
+        self.__x = 3.1415
+    def mul(self, a):
+        return self.__x * a
+        
+v=Vector()
+v.mul(1) # 3.1415
+v.__x # AttributeError: 'Vector' object has no attribute '__x'
+```
+
+Using the double underscore the variable has become private and cannot be accessed directly. How can we access the value of the variable?
+The value can be returned by any internal method but there is another method we can use which is based on the decoreator `@property`. The `@property` decorator marks the getter method of a property. In this way we can simply access the private attribute. For instance:
+
+```python
+class Vector:
+    def __init__(self):
+        self.__x = 3.1415
+
+    def get_x(self):
+        return self.__x
+        
+    @property
+    def x(self):
+        return self.__x
+        
+v=Vector()
+v.get_x() # 3.1415
+v.x # 3.14.15
+v.x() # TypeError: 'float' object is not callable
+```
+
+Name mangling
+----------
+
+Consider this scenario: someone wrote a class named `Dog` that uses a `mood` instance attribute internally, without exposing it. You need to subclass `Do`g as `Beagle`. If you create your own `mood` instance attribute without being aware of the name clash, you will clobber the `mood` attribute used by the methods inherited from `Dog`. This would be a pain to debug. To prevent this, if you name an instance attribute in the form `__mood` (two leading underscores and zero or at most one trailing underscore), Python stores the name in the instance `__dict__` prefixed with a leading underscore and the class name, so in the Dog class, `__mood` becomes `_Dog__mood`, and in Beagle it’s `_Beagle__mood`. This language feature goes by the lovely name of name mangling. Here is an example:
+
+```python
+class Vector:
+    def __init__(self):
+        self.__x = 3.1415
+v=Vector()
+v.__dict__ # {'_Vector__x': 3.1415}
+v._Vector__x # 3.1415
+```
+
+Name mangling is about safety, not security: it’s designed to prevent accidental access and not intentional wrongdoing. In other words, it prevents accidental activation, not malicious use. The name mangling functionality is not loved by all Pythonistas, and neither is the
+skewed look of names written as `self.__x`. Some prefer to avoid this syntax and use just one underscore prefix to “protect” attributes by convention (e.g., `self._x`). Critics of the automatic double-underscore mangling suggest that concerns about accidental attribute clobbering should be addressed by naming conventions. The single underscore prefix has no special meaning to the Python interpreter when used in attribute names, but it’s a very strong convention among Python programmers that you should not access such attributes from outside the class. 8 It’s easy to respect the privacy of an object that marks its attributes with a single `_` , just as it’s easy respect the convention that variables in `ALL_CAPS` should be treated as constants.
 
 
 
