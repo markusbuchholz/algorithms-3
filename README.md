@@ -53,6 +53,15 @@ Algorithms Part II
 
 19. **Shortest path**: (search algorithm) finding the shortest path between two nodes in efficient way is not easy. Here are discussed different solutions and the Dijkstra algorithm [[link]](./shortest-path)
 
+Useful algorithms
+-----------------
+
+- **Boyer–Moore majority vote**: finding the majority of a sequence of elements using linear time and constant space [[link]](./useful/boyer-moore-majority/README.md)
+
+
+Interviews
+-----------
+
 Official requirements (of different companies) for passing coding interview:
 
 - Google [[readme]](./interview/google.md)

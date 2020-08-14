@@ -8,6 +8,9 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 7](#chapter-7-function-decorators-and-closures): **Function Decorators and Closures.** Definition, stacked and parameterized decorators, local variables, closures.
 - [Chapter 8](#chapter-8-object-references-mutability-and-recycling): **Object References, Mutability, and Recycling.** Copies and deep copies, garbage collector, parameters as references.
 - [Chapter 9](#chapter-9-pythonic-objects): **Pythonic objects.** Object representations, hashable objects, class private instances, name mangling.
+- [Chapter 10](#chapter-10-sequence-hacking-hashing-and-slicing): **Sequence hacking, hashing, and slicing.** Protocols, duck typing, reducing functions (reduce, map-reduce, zip).
+- [Chapter 11](http://localhost:6419/python-tips/#chapter-11-interfaces-from-protocols-to-abcs): **Interfaces: From Protocols to ABCs.** Interfaces, defining and subclassing ABCs.
+
 
 Chapter 2: Data Structures
 ===========================
@@ -1255,6 +1258,286 @@ v._Vector__x # 3.1415
 
 Name mangling is about safety, not security: it’s designed to prevent accidental access and not intentional wrongdoing. In other words, it prevents accidental activation, not malicious use. The name mangling functionality is not loved by all Pythonistas, and neither is the
 skewed look of names written as `self.__x`. Some prefer to avoid this syntax and use just one underscore prefix to “protect” attributes by convention (e.g., `self._x`). Critics of the automatic double-underscore mangling suggest that concerns about accidental attribute clobbering should be addressed by naming conventions. The single underscore prefix has no special meaning to the Python interpreter when used in attribute names, but it’s a very strong convention among Python programmers that you should not access such attributes from outside the class. 8 It’s easy to respect the privacy of an object that marks its attributes with a single `_` , just as it’s easy respect the convention that variables in `ALL_CAPS` should be treated as constants.
+
+
+Chapter 10: Sequence hacking, hashing, and slicing
+==================================================
+
+Protocols
+---------
+
+In the context of object-oriented programming, a **protocol is an informal interface**, defined only in documentation and not in code. For example, the sequence protocol in Python entails just the `__len__` and `__getitem__` methods. Any class `Spam` that implements those methods with the standard signature and semantics can be used anywhere a sequence is expected. Whether `Spam` is a subclass of this or that is irrelevant; all that matters is that it provides the necessary methods.
+
+
+```python
+import collections
+Card = collections.namedtuple('Card', ['rank', 'suit'])
+class FrenchDeck:
+    ranks = [str(n) for n in range(2, 11)] + list('JQKA')
+    suits = 'spades diamonds clubs hearts'.split()
+    def __init__(self):
+        self._cards = [Card(rank, suit) for suit in self.suits
+        for rank in self.ranks]
+    def __len__(self):
+        return len(self._cards)
+    def __getitem__(self, position):
+        return self._cards[position]
+```
+
+The FrenchDeck class takes advantage of many Python facilities because it implements the sequence protocol, even if that is not declared anywhere in the code. Any experienced Python coder will look at it and understand that it is a sequence, even if it subclasses object . We say it is a sequence because it behaves like one, and that is what matters. This became known as **duck typing**, after Alex Martelli’s post:
+
+
+*"Don’t check whether it *is*-a duck: check whether it *quacks*-like-a duck, *walks*-like-a duck, etc, etc, depending on exactly what subset of duck-like behavior you need to play your language-games with. ( comp.lang.python , Jul. 26, 2000)"*
+
+
+Because protocols are informal and unenforced, you can often get away with implementing just part of a protocol, if you know the specific context where a class will be used. For example, to support iteration, only `__getitem__` is required; there is no need to provide `__len__`.
+
+
+
+Reducing functions
+--------------------
+
+If we want to implement a vector class of arbitrary lenght we have to rethink a few things. One crucial step is to get `__hash__` and `__eq__` to make Vector instances hashable. In the case of just 2D vectors, the `__hash__` simply computed `hash(self.x) ^ hash(self.y)`. We now would like to apply the `^` (xor) operator to the hashes of an arbitrary number of components, in
+succession, like this: `v[0] ^ v[1] ^ v[2] ...` That is what the `functools.reduce` function is for.
+
+The reducing functions `reduce`, `sum`, `any`, `all` produce a single aggregate result from a sequence or from any finite iterable object. This is similar to methods like `reduce_sum` or `reduce_mean` in tensor frameworks like PyTorch. Given a sequence of elements the reducing functions will return a single element.
+
+**Reduce.** Let’s say we have a two-argument function `fn` and a list `lst`. When you call `reduce(fn, lst)`, `fn` will be applied to the first pair of elements `fn(lst[0], lst[1])` producing a first result, `r1`. Then `fn` is applied to `r1` and the next element `fn(r1, lst[2])` producing a second result, `r2`. Now `fn(r2, lst[3])` is called to produce `r3` ... and so on until the last element, when a single result, `rN`, is returned. Here is how you could use reduce to compute 5! (the factorial of 5):
+
+```python
+2 * 3 * 4 * 5 # the result we want: 5! == 120
+# 120
+import functools
+functools.reduce(lambda a,b: a*b, range(1, 6))
+# 120
+```
+
+The reduced xor on the multidimensional vector could be done in a similar way by using the same `reduce` method.
+
+**Map-reduce.** This just consists in two steps: (i) apply a function to each item to generate a new series (map), then (ii) compute aggregate (reduce).
+
+**Zip.** Having a for loop that iterates over items without fiddling with index variables is great and prevents lots of bugs, but demands some special utility functions. One of them is the `zip` built-in, which makes it easy to iterate in parallel over two or more iterables by returning tuples that you can unpack into variables, one for each item in the parallel inputs. The `zip` function is named after the zipper fastener because the physical device works by interlocking pairs of teeth taken from both zipper sides, a good visual analogy for what `zip(left, right)` does. No relation with compressed files. Here is an example of zip functionalities:
+
+```python
+zip(range(3), 'ABC') # <zip object at 0x10063ae48>
+
+list(zip(range(3), 'ABC')) 
+# [(0, 'A'), (1, 'B'), (2, 'C')]
+
+list(zip(range(3), 'ABC', [0.0, 1.1, 2.2, 3.3])) 
+# [(0, 'A', 0.0), (1, 'B', 1.1), (2, 'C', 2.2)]
+
+from itertools import zip_longest
+list(zip_longest(range(3), 'ABC', [0.0, 1.1, 2.2, 3.3], fillvalue=-1))
+# [(0, 'A', 0.0), (1, 'B', 1.1), (2, 'C', 2.2), (-1, -1, 3.3)]
+```
+
+
+Chapter 11: Interfaces: from protocols to ABCs
+==================================================
+
+ABCs were introduced in Python 2.6. Common use of ABCs is as superclasses when you need to implement an interface. They check concrete subclasses for conformance to the interface they define, with a registration mechanism that lets developers declare that a class implements an interface without subclassing. ABCs can be programmed to automatically “recognize” arbitrary classes that conform to their interface without subclassing or explicit registration.
+
+ATTENTION: ABCs, like descriptors and metaclasses, are tools for building frameworks. Therefore, only a very small minority of Python developers can create ABCs without imposing unreasonable limitations and needless work on fellow programmers. I don’t want to encourage you to start writing your own ABCs left and right. The risk of over-engineering with ABCs is very high.
+
+Interfaces in Python
+--------------------
+
+Python was already highly successful before ABCs were introduced, and most existing code does not use them at all. Protocols and Duck Typing are defined as the informal interfaces that make polymorphism work in languages with dynamic typing like Python. 
+
+How do interfaces work in a dynamic-typed language? First, the basics: even without an `interface` keyword in the language every class has an interface: the set public attributes (methods or data attributes) implemented or inherited by the class. This includes special methods, like `__getitem__` or `__add__`. By definition, protected and private attributes are not part of an interface, “protected” is merely a naming convention (the single leading `_` underscore) and private attributes are easily accessed. It is bad form to violate these conventions. However, it’s not a sin to have public data attributes as part of the interface of an object, because—if necessary—a data attribute can always be turned into a property implementing getter/setter logic without breaking client code that uses the plain `obj.attr` syntax.
+
+A useful complementary definition of interface is: the subset of an object’s public methods that enable it to play a specific role in the system. That’s what is implied when the Python documentation mentions “a file-like object” or “an iterable,” without specifying a class.
+
+Sequences
+----------
+
+One of the most fundamental interfaces in Python is the sequence protocol. The interpreter goes out of its way to handle objects that provide even a minimal implementation of that protocol, as the next section demonstrates.
+
+Abstract classes from `collections.abc` (superclasses):
+
+- Container: `__contains__` (abstract method)
+- Iterable: `__iter__` (abstract method)
+- Sized: `__len__` (abstract method)
+
+Sequence (subclass): `__getitem__` (abstract method), `__contains__`, `__iter__`, `__reversed__`, `index`, `count`.
+
+
+Now, take a look at the Foo class in the following example. It does not inherit from `abc.Sequence`, and it only implements one method of the sequence protocol: `__getitem__` (`__len__` is missing).
+
+```python
+class Foo:
+    def __getitem__(self, pos):
+        return range(0, 30, 10)[pos]
+        
+f = Foo()
+for i in f: print(i) # 0 10 20
+```
+
+There is no method `__iter__` yet Foo instances are iterable because—as a fallback— when Python sees a `__getitem__` method, it tries to iterate over the object by calling that method with integer indexes starting with 0. Because Python is smart enough to iterate over `Foo` instances, it can also make the in operator work even if Foo has no `__contains__` method: it does a full scan to check if an item is present. In summary, given the importance of the sequence protocol, in the absence `__iter__` and `__contains__` Python still manages to make iteration and the in operator work by invoking `__getitem__`.
+
+A good part of these exaples work because of the special treatment Python gives to anything vaguely resembling a sequence. Iteration in Python represents an extreme form of duck typing: the interpreter tries two different methods to iterate over objects.
+
+Subclassing an ABC
+------------------
+
+The French deck example of previous chapters can be reframed as a sublass of ABC. We can leverage an existing ABC, `collections.MutableSequence`, before daring to invent our own. `FrenchDeck2` is explicitly declared a subclass of `collections.MutableSequence` as follows:
+
+
+```python
+import collections
+
+Card = collections.namedtuple('Card', ['rank', 'suit'])
+
+class FrenchDeck2(collections.MutableSequence): # Note the superclass assignment
+    ranks = [str(n) for n in range(2, 11)] + list('JQKA')
+    suits = 'spades diamonds clubs hearts'.split()
+    def __init__(self):
+        self._cards = [Card(rank, suit) for suit in self.suits
+        for rank in self.ranks]
+        
+    def __len__(self):
+        return len(self._cards)
+        
+    def __getitem__(self, position):
+        return self._cards[position]
+        
+    def __setitem__(self, position, value):
+        self._cards[position] = value
+        
+    def __delitem__(self, position):
+        del self._cards[position]
+        
+    def insert(self, position, value):
+        self._cards.insert(position, value)
+```
+
+Note that, subclassing `MutableSequence` forces us to implement `__delitem__`, an abstract method of that `ABC`, and `__setitem__` which enables shuffling. If we fail to implement any abstract method, we get a `TypeError` exception with a message such as: *Can't instantiate
+abstract class FrenchDeck2 with abstract methods `__delitem__`, `insert`*. That’s why we must implement `__delitem__` and `insert`, even if our FrenchDeck2 examples do not need those behaviors: the MutableSequence ABC demands them.
+
+From `Sequence`, `FrenchDeck2` inherits the following ready-to-use concrete methods: `__contains__`, `__iter__`, `__reversed__`, `index`, and `count`. From `MutableSequence`, it gets `append`, `reverse`, `extend`, `pop`, `remove`, and `__iadd__`.
+
+The Numbers Tower of ABCs
+-------------------------
+
+The numbers package defines the so-called “numerical tower” (i.e., this linear hierarchy of ABCs), where Number is the topmost superclass, Complex is its immediate subclass, and so on, down to Integral :
+
+- Number
+- Complex
+- Real
+- Rational
+- Integral
+
+So if you need to check for an integer, use `isinstance(x, numbers.Integral)` to accept `int`, `bool` (which subclasses `int`) or other integer types that may be provided by external libraries that register their types with the numbers ABCs. And to satisfy your check, you or the users of your API may always register any compatible type as a virtual subclass of `numbers.Integral`.
+
+Defining and Using an ABC
+-------------------------
+
+To justify creating an ABC, we need to come up with a context for using it as an extension point in a framework. So here is our context: imagine you need to display advertisements on a website or a mobile app in random order, but without repeating an ad before the full inventory of ads is shown. Now let’s assume we are building an ad management framework called ADAM. 
+
+One of its requirements is to support user-provided nonrepeating random-picking classes. 8 To make it clear to ADAM users what is expected of a “nonrepeating random-picking” component, we’ll define an ABC.
+Taking a clue from “stack” and “queue” (which describe abstract interfaces in terms of physical arrangements of objects), I will use a real-world metaphor to name our ABC: bingo cages and lottery blowers are machines designed to pick items at random from a finite set, without repeating, until the set is exhausted.
+
+The ABC will be named Tombola, after the Italian name of bingo and the tumbling container that mixes the numbers. The Tombola ABC has four methods. 
+
+The two abstract methods are:
+- `.load(...)` : put items into the container.
+- `.pick()` : remove one item at random from the container, returning it.
+
+The concrete methods are:
+- `.loaded()` : return True if there is at least one item in the container.
+- `.inspect()` : return a sorted tuple built from the items currently in the container,
+
+without changing its contents (its internal ordering is not preserved).
+
+```python
+import abc
+class Tombola(abc.ABC):
+
+    @abc.abstractmethod
+    def load(self, iterable):
+    """Add items from an iterable."""
+    
+    @abc.abstractmethod
+    def pick(self):
+    """Remove item at random, returning it.
+    This method should raise `LookupError` when the instance is empty.
+    """
+    
+    def loaded(self):
+    """Return `True` if there's at least 1 item, `False` otherwise."""
+        return bool(self.inspect())
+        
+    def inspect(self):
+    """Return a sorted tuple with the items currently inside."""
+        items = []
+        while True:
+            try:
+                items.append(self.pick())
+            except LookupError:
+                break
+            self.load(items)
+            return tuple(sorted(items))
+```
+
+
+To define an ABC, subclass `abc.ABC`. An abstract method is marked with the `@abstractmethod` decorator, and often its body is empty except for a docstring. The docstring instructs implementers to raise `LookupError` if there are no items to pick. An ABC may include concrete methods. Concrete methods in an ABC must rely only on the interface defined by the ABC (i.e., other concrete or abstract methods or properties of the ABC). We can’t know how concrete subclasses will store the items, but we can build the inspect result by emptying the Tombola with successive calls to `.pick()` then use `.load(...)` to put everything back.
+
+We now have our very own Tombola ABC. To witness the interface checking performed
+by an ABC, let’s try to fool Tombola with a defective implementation:
+
+
+```python
+from tombola import Tombola
+
+class Fake(Tombola):
+    def pick(self):
+        return 13
+
+Fake
+# <class '__main__.Fake'>
+# <class 'abc.ABC'>, <class 'object'>)
+f = Fake()
+# Traceback (most recent call last): File "<stdin>", line 1, in <module>
+#TypeError: Can't instantiate abstract class Fake with abstract methods load
+```
+
+`TypeError` is raised when we try to instantiate `Fake`. The message is very clear: `Fake` is considered abstract because it failed to implement `load`, one of the abstract methods declared in the `Tombola` ABC.
+
+
+**Subclassing the Tombola ABC**
+
+Given the Tombola ABC, we’ll now develop two concrete subclasses that satisfy its interface. These classes were pictured in Figure 11-4, along with the virtual subclass to be discussed in the next section.
+The next version of `BingoCage` class is a variation of the one used in previous chapters, using a better randomizer. This `BingoCage` implements the required abstract methods `load` and `pick`, inherits `loaded` from `Tombola`, overrides `inspect`, and adds `__call__`.
+
+
+
+```python
+import random
+from tombola import Tombola
+
+class BingoCage(Tombola):
+    def __init__(self, items):
+        self._randomizer = random.SystemRandom()
+        self._items = []
+        self.load(items)
+        
+    def load(self, items):
+        self._items.extend(items)
+        self._randomizer.shuffle(self._items)
+        
+    def pick(self):
+        try:
+            return self._items.pop()
+        except IndexError:
+            raise LookupError('pick from empty BingoCage')
+            
+    def __call__(self):
+        self.pick()
+```
+
+
+
 
 
 
