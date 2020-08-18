@@ -53,11 +53,12 @@ Algorithms Part II
 
 19. **Shortest path**: (search algorithm) finding the shortest path between two nodes in efficient way is not easy. Here are discussed different solutions and the Dijkstra algorithm [[link]](./shortest-path)
 
-Useful algorithms
------------------
+Useful templates and strategies
+---------------------------------
 
 - **Boyer–Moore majority vote**: finding the majority of a sequence of elements using linear time and constant space [[link]](./useful/boyer-moore-majority/README.md)
 
+- **Find loops (an topological sorting) in directed graphs via Depth-First Search**: [[link]](./useful/loop-finder-dfs/README.md) the use of DFS is the common choice for finding loops and topologically sort a digraph (other choice could be Breadth-First Search).
 
 Interviews
 -----------
