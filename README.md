@@ -69,3 +69,12 @@ Official requirements (of different companies) for passing coding interview:
 
 - Google [[readme]](./interview/google.md)
 - Facebook [[readme]](./interview/facebook.md)
+
+Machine Learning interviews
+---------------------------
+
+Various guides for passing Machine Learning interviews:
+
+- Tips and Tricks [[readme]](./machine-learning/khangich/README.md)
+
+

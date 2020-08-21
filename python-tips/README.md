@@ -10,7 +10,8 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 9](#chapter-9-pythonic-objects): **Pythonic objects.** Object representations, hashable objects, class private instances, name mangling.
 - [Chapter 10](#chapter-10-sequence-hacking-hashing-and-slicing): **Sequence hacking, hashing, and slicing.** Protocols, duck typing, reducing functions (reduce, map-reduce, zip).
 - [Chapter 11](http://localhost:6419/python-tips/#chapter-11-interfaces-from-protocols-to-abcs): **Interfaces: From Protocols to ABCs.** Interfaces, defining and subclassing ABCs.
-
+- [Chapter 12](#chapter-12-inheritance-and-subclassing): **Inheritance and subclassing.** Subclassing buil-ins, multiple inheritance, Method Resolution Order (MRO).
+- [Chapter 13](#chapter-13-operator-overloading): **Operator Overloading.** Unary, rich comparison, and in-place operators.
 
 Chapter 2: Data Structures
 ===========================
@@ -1507,7 +1508,7 @@ f = Fake()
 
 **Subclassing the Tombola ABC**
 
-Given the Tombola ABC, we’ll now develop two concrete subclasses that satisfy its interface. These classes were pictured in Figure 11-4, along with the virtual subclass to be discussed in the next section.
+Given the Tombola ABC, we’ll now develop two concrete subclasses that satisfy its interface.
 The next version of `BingoCage` class is a variation of the one used in previous chapters, using a better randomizer. This `BingoCage` implements the required abstract methods `load` and `pick`, inherits `loaded` from `Tombola`, overrides `inspect`, and adds `__call__`.
 
 
@@ -1537,7 +1538,356 @@ class BingoCage(Tombola):
 ```
 
 
+Chapter 12: Inheritance and subclassing
+========================================
 
 
+Subclassing Built-In Types
+--------------------------
 
+Before Python 2.2, it was not possible to subclass built-in types such as list or dict. After that, it has been possible to do it but we must be careful. Subclassing built-in types like `dict` or `list` or `str` directly is error-prone because the built-in methods mostly ignore user-defined overrides. Instead of subclassing the built-ins, derive your classes from the collections module using `UserDict`, `UserList`, and `UserString`, which are designed to be easily extended.
+The problem described in this section applies only to method delegation within the C language implementation of the built-in types, and only affects user-defined classes derived directly from those types. If you subclass from a class coded in Python, such as `UserDict` or `MutableMapping`, you will not be troubled by this.
+
+As an example, we create a `DoppelDict` class which is a subclass of `dict`.
+`DoppelDict` has a `__setitem__` method that takes the input value and duplicates it when storing (for no good reason, just to have a visible effect). It works by delegating to the superclass.
+
+```python
+class DoppelDict(dict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key, [value] * 2)
+```
+
+Now, we can use this class to show a tricky fact. The `__init__` method inherited from `dict` ignores that `__setitem__`
+is overridden. Therefore, adding a value when the object is created will not duplicate that value:
+
+```python
+dd = DoppelDict(one=1) # {'one': 1}
+dd['two'] = 2 # {'one': 1, 'two': [2, 2]}
+dd.update(three=3) # {'three': 3, 'one': 1, 'two': [2, 2]}
+```
+
+If you subclass `collections.UserDict` instead of `dict`, the issues are solved:
+
+```python
+import collections
+
+class DoppelDict2(collections.UserDict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key, [value] * 2)
+```
+
+Now, using the new class will not generate previous issues:
+
+```python
+dd = DoppelDict2(one=1) # {'one': [1, 1]}
+dd['two'] = 2 # {'two': [2, 2], 'one': [1, 1]}
+dd.update(three=3) # {'two': [2, 2], 'three': [3, 3], 'one': [1, 1]}
+```
+
+Multiple Inheritance 
+---------------------
+
+
+Any language implementing multiple inheritance needs to deal with potential naming conflicts when unrelated ancestor classes implement a method by the same name. This is called the **diamond problem**. To explain this problem we create 4 classes: `A`, `B`, `C`, `D`. Both classes `B` and `C` implement a `pong` method.
+
+```
+       A (ping)
+        /\ /\
+        /   \
+       /     \
+      /       \
+B (pong)     C (pong)
+     /\       /\
+      \       /
+       \     /
+        \   /
+      D (pingpong)
+```
+
+We can reproduce the diamond in Python. Both classes `B` and `C` implement a `pong` method; the only difference is that `C.pong` outputs the word PONG in uppercase.
+
+```python
+class A:
+    def ping(self):
+        print('ping:', self)
+        
+class B(A):
+    def pong(self):
+        print('pong:', self)
+        
+class C(A):
+    def pong(self):
+        print('PONG:', self)
+        
+class D(B, C):
+    def ping(self):
+        super().ping()
+        print('post-ping:', self)
+    def pingpong(self):
+        self.ping()
+        super().ping()
+        self.pong()
+        super().pong()
+        C.pong(self)
+```
+
+If you call `d.pong()` on an instance of `D`, which pong method actually runs? In C++, the programmer must qualify method calls with class names to resolve this ambiguity. This can be done in Python as well:
+
+```python
+from diamond import *
+d = D()
+d.pong() # pong: <diamond.D object at 0x10066c278>
+C.pong(d) # PONG: <diamond.D object at 0x10066c278>
+```
+
+Simply calling `d.pong()` causes the `B` version to run. You can always call a method on a superclass directly, passing the instance as an explicit argument with `C.pong(d)`.
+
+
+Method Resolution Order
+-----------------------
+
+The ambiguity of a call like `d.pong()` is resolved because Python follows a specific order when traversing the inheritance graph. That order is called **MRO: Method Resolution Order**. Classes have an attribute called `__mro__` holding a tuple of references to the superclasses in MRO order, from the current class all the way to the object class. For the `D` class, this is the `__mro__`.
+
+```
+D.__mro__
+# (<class 'diamond.D'>, <class 'diamond.B'>, <class 'diamond.C'>,
+# <class 'diamond.A'>, <class 'object'>)
+```
+
+The recommended way to delegate method calls to superclasses is the `super()` built-in function. However, it’s also possible, and sometimes convenient, to bypass the MRO and invoke a method on a superclass directly. When calling an instance method directly on a class, you must pass `self` explicitly, because you are accessing an unbound method. For example, the `D.ping` method could be written as:
+
+```python
+...
+
+def ping(self):
+    A.ping(self) # instead of super().ping()
+    print('post-ping:', self)
+
+from diamond import D
+d = D()
+d.ping()
+# ping: <diamond.D object at 0x10cc40630> #
+# post-ping: <diamond.D object at 0x10cc40630>
+```
+
+The `ping` of `D` makes two calls. The first call is `super().ping()`; the `super` delegates the `ping` call to class `A`; `A.ping(self)` outputs `"ping"`. The second call is `print('post-ping:', self)`, which outputs `"post-ping"`.
+
+Let’s see what happens when `pingpong` is called on an instance of `D`:
+
+```python
+from diamond import D
+d = D()
+d.pingpong()
+d.pingpong()
+ping: <diamond.D object at 0x10bf235c0> #1
+post-ping: <diamond.D object at 0x10bf235c0>
+ping: <diamond.D object at 0x10bf235c0> #2
+pong: <diamond.D object at 0x10bf235c0> #3
+pong: <diamond.D object at 0x10bf235c0> #4
+PONG: <diamond.D object at 0x10bf235c0> #5
+```
+
+Call `#1` is `self.ping()`, which runs the ping method of `D`, which outputs this line and the next one.
+Call `#2` is `super.ping()`, which bypasses the ping in `D` and finds the `ping` method in `A`.
+Call `#3` is `self.pong()`, which finds the `B` implementation of `pong`, according to the `__mro__`.
+Call `#4` is `super.pong()`, which finds the same `B.pong` implementation, also following the `__mro__`.
+Call `#5` is `C.pong(self)`, which finds the `C.pong` implementation, ignoring the `__mro__`.
+
+The MRO takes into account not only the inheritance graph but also the order in which superclasses are listed in a subclass declaration. In other words, if in `diamond.py` the `D` class was declared as `class D(C, B):`, the `__mro__` of class `D` would be different: `C` would be searched before `B`.
+
+Dealing with Multiple Inheritance
+---------------------------------
+
+It’s easy to create incomprehensible and brittle designs using multiple inheritance. Because we don’t have a comprehensive theory, here are a few tips to avoid spaghetti class graphs. To avoid this you can follow these guidelines:
+
+1. Distinguish interface inheritance from implementation inheritance. It’s useful to keep straight the reasons why subclassing is done in the first place. (i) Inheritance of interface creates a subtype, implying an “is-a” relationship. (ii) Inheritance of implementation avoids code duplication by reuse.
+2. Make interfaces explicit with ABCs. If a class is designed to define an interface, it should be an explicit ABC. In Python ≥ 3.4, this means: subclass `abc.ABC` or another `ABC`.
+3. Use mixins for code reuse. If a class is designed to provide method implementations for reuse by multiple unrelated
+subclasses, without implying an “is-a” relationship, it should be an explicit *"mixin class"*. Conceptually, a mixin does not define a new type; it merely bundles methods for reuse. A mixin should never be instantiated, and concrete classes should not inherit only from a mixin. Each mixin should provide a single specific behavior, implementing few and very closely related methods.
+4. Make mixins explicit by naming. There is no formal way in Python to state that a class is a mixin, so it is highly recommended that they are named with a `...Mixin` suffix. Tkinter does not follow this advice, but if it did, `XView` would be `XViewMixin`, `Pack` would be `PackMixin`, and so on.
+5. An ABC may also be a mixin; the reverse is not true. Because an ABC can implement concrete methods, it works as a mixin as well. An ABC also defines a type, which a mixin does not. And an ABC can be the sole base class of any other class, while a mixin should never be subclassed alone except by another, more specialized mixin-not a common arrangement in real code. One restriction applies to ABCs and not to mixins: the concrete methods implemented in an ABC should only collaborate with methods of the same ABC and its superclasses. This implies that concrete methods in an ABC are always for convenience, because everything they do, a user of the class can also do by calling other methods of the ABC.
+6. Don’t subclass from more than one concrete class. Concrete classes should have zero or at most one concrete superclass. 6 In other words, all but one of the superclasses of a concrete class should be ABCs or mixins. For example, in the following code, if `Alpha` is a concrete class, then `Beta` and `Gamma` must be ABCs or mixins: `class MyConcreteClass(Alpha, Beta, Gamma):`
+7. Provide aggregate classes to users. If some combination of ABCs or mixins is particularly useful to client code, provide a class that brings them together in a sensible way. For example: `class Widget(BaseWidget, Pack, Place, Grid): pass`. The body of `Widget` is empty by `pass`, but the class provides a useful service: it brings together four superclasses so that anyone who needs to create a new widget does not need to remember all those mixins, or wonder if they need to be declared in a certain order.
+8. Favor object composition over class inheritance. Once you get comfortable with inheritance, it’s too easy to overuse it. Placing objects in a neat hierarchy appeals to our sense of order; programmers do it just for fun. However, favoring composition leads to more flexible designs.
+
+
+Chapter 13: Operator Overloading
+================================
+
+Operator overloading has a bad name in some circles. It is a language feature that can be (and has been) abused, resulting in programmer confusion, bugs, and unexpected performance bottlenecks. But if well used, it leads to pleasurable APIs and readable code. Python strikes a good balance between flexibility, usability, and safety by imposing some limitations:
+
+- We cannot overload operators for the built-in types.
+- We cannot create new operators, only overload existing ones.
+- A few operators can’t be overloaded: `is`, `and`, `or`, `not` (but `&`, `|`, `~`, can).
+
+Unary Operators
+---------------
+
+We consider three unary operators, shown here with their associated special methods:
+
+1. `-` or `( __neg__ )`. Arithmetic unary negation. If `x` is `-2` then `-x == 2`.
+2. `+` or `( __pos__ )`. Arithmetic unary plus. Usually `x == +x` (there are a few cases when that’s not true).
+3. `~` or `( __invert__ )`. Bitwise inverse of an integer, defined as `~x == -(x+1)`. If `x` is `2` then `~x == -3`.
+
+The Python Language Reference also lists the `abs()` built-in function as a unary operator. The associated special method is `__abs__`, as we’ve seen before. 
+
+In the case of `-` and `+`, the result will probably be an instance of the same class as `self`; for `+`, returning a copy of `self` is the best approach most of the time. For `abs()`, the result should be a scalar number. As for `~`, it’s difficult to say what would be a sensible result if you’re not dealing with bits in an integer, it could make sense to return the negation of an SQL `WHERE` clause, for example.
+
+We can define the three unary operators for the `Vector` class defined before:
+
+```python
+...
+
+def __abs__(self):
+    return math.sqrt(sum(x * x for x in self))
+    
+def __neg__(self):
+   return Vector(-x for x in self)
+   
+def __pos__(self):
+    return Vector(self)
+```
+
+We havel not implemented `__invert__`, so if the user tries `~v` on a `Vector` instance, Python will raise `TypeError` with a clear message: `“bad operand type for unary ~: 'Vector' .”`
+
+```python
+v1 = Vector([3, 4, 5])
+v2 = Vector([6, 7, 8])
+v1 + v2 # Vector([9.0, 11.0, 13.0])
+v1 + v2 == Vector([3+6, 4+7, 5+8]) # True
+```
+
+What happens if we try to add two Vector instances of different lengths? We could raise an error, but considering practical applications (such as information retrieval), it’s better to fill out the shortest `Vector` with zeros. Given these basic requirements, the implementation of `__add__` is short and sweet:
+
+```python
+...
+
+def __add__(self, other):
+    pairs = itertools.zip_longest(self, other, fillvalue=0.0)
+    return Vector(a + b for a, b in pairs)
+
+v1 = Vector([3, 4, 5, 6])
+v3 = Vector([1, 2])
+v1 + v3 # Vector([4.0, 6.0, 5.0, 6.0])
+```
+
+To support operations involving objects of different types, Python implements a special dispatching mechanism for the infix operator special methods. Given an expression `a + b`, the interpreter will perform these steps
+
+1. If `a` has `__add__`, call `a.__add__(b)` and return result unless it’s `NotImplemented`.
+2. If `a` doesn’t have `__add__`, or calling it returns `NotImplemented`, check if `b` has `__radd__`, then call `b.__radd__(a)` and return result unless it’s `NotImplemented`.
+3. If `b` doesn’t have `__radd__`, or calling it returns `NotImplemented`, raise `TypeError` with an unsupported operand types message.
+
+**Reverse (right) add.** The `__radd__` method is called the “reflected” or “reversed” version of `__add__`. I prefer to call them “reversed” but other people like to think of them as the “right” special methods, because they are called on the righthand operand. Whatever “r”-word you prefer, that’s what the “r” prefix stands for in `__radd__`, `__rsub__`, and the like. Therefore, to make the mixed-type additions , we need to implement the `Vector.__radd__` method, which Python will invoke as a fall back if the left operand does not implement `__add__` or if it does but returns `NotImplemented` to signal that it doesn’t know how to handle the right operand. Do not confuse `NotImplemented` with `NotImplementedError`. The `NotImplemented`, is a special singleton value that an infix operator special method should return to tell the interpreter it cannot handle a given operand. In contrast, `NotImplementedError` is an exception that stub methods in abstract classes raise to warn that they must be overwritten by subclasses.
+
+A simple implementation of `__radd__` for our `Vector` class could consists of switching the order to the operands (moving `self` to the left) and then call `__add__`. This applies to any commutative operator; `+` is commutative when dealing with numbers or our vectors, but it’s not commutative when concatenating sequences in Python.
+
+```python
+...
+
+def __add__(self, other):
+    pairs = itertools.zip_longest(self, other, fillvalue=0.0)
+    return Vector(a + b for a, b in pairs)
+    
+def __radd__(self, other):
+    return self + other # moving self to the left and call __add__
+```
+
+In the spirit of duck typing, we will refrain from testing the type of the other operand, or the type of its elements. We’ll catch the exceptions and return `NotImplemented`. If the interpreter has not yet reversed the operands, it will try that. If the reverse method
+call returns NotImplemented , then Python will raise issue `TypeError` with a standard error message like `“unsupported operand type(s) for +: Vector and str”`.
+
+```python
+...
+
+def __add__(self, other):
+    try:
+        pairs = itertools.zip_longest(self, other, fillvalue=0.0)
+        return Vector(a + b for a, b in pairs)
+    except TypeError:
+        return NotImplemented
+        
+    def __radd__(self, other):
+        return self + other
+```
+
+**Multiplication.** We also implement the multiplication operator, following the Numpy convention for arrays. In Numpy `*` is only defined for array and scalars, in case of two arrays we need to apply the `numpy.dot()` method. 
+
+```python
+import numbers
+
+...
+
+def __mul__(self, scalar):
+    if isinstance(scalar, numbers.Real):
+        return Vector(n * scalar for n in self)
+    else:
+        return NotImplemented
+
+def __rmul__(self, scalar):
+    return self * scalar
+```
+
+We can use `numbers.Real` to check if the input scalar is a valid real, otherwise we raise a `NotImplemented` error. We also implement the `__rmul__` and since also multiplication is commutative we can use the same trick used in the `__radd__` method and just switch the order of the operands.
+
+**Matrix multiplication.** Python 3.4 does not have an infix operator for the dot product. However, Python 3.5 has a dedicated infix operator for matrix multiplication, making the `@` sign available for that purpose (e.g., `a @ b` is the dot product of `a` and `b`). The `@` operator is supported by the special methods `__matmul__`, `__rmatmul__`, and `__imatmul__`, named for matrix multiplication. Using this, we can easily implement the dot product in our `Vector` class:
+
+```python
+
+...
+
+def __matmul__(self, other):
+    try:
+        return sum(a * b for a, b in zip(self, other))
+    except TypeError:
+        return NotImplemented
+        
+    def __rmatmul__(self, other):
+        return self @ other
+```
+
+As usual we applied the same trick for the reverse `__rmatmul__` operator.
+
+
+Rich Comparison Operators
+-------------------------
+
+The handling of the rich comparison operators `==`, `!=`, `>`, `<`, `>=`, `<=` by the Python interpreter is similar to what we just saw, but differs in two important aspects:
+
+- The same set of methods are used in forward and reverse operator calls. For example, in the case of `==`, both the forward and
+reverse calls invoke `__eq__`, only swapping arguments; and a forward call to `__gt__` is followed by a reverse call to `__lt__` with the swapped arguments.
+- In the case of `==` and `!=`, if the reverse call fails, Python compares the object IDs instead of raising `TypeError`.
+
+<p align="center">
+<img src="./images/rich_comparison_operators.png" width="500">
+</p>
+
+We can extend the `Vector` class even more now by adding the equal `==` and not equal `!=` operators:
+
+```python
+
+...
+
+def __eq__(self, other):
+    if isinstance(other, Vector):
+        return (len(self) == len(other) and
+            all(a == b for a, b in zip(self, other)))
+    else:
+        return NotImplemented
+        
+def __ne__(self, other):
+    eq_result = self == other
+    if eq_result is NotImplemented:
+        return NotImplemented
+    else:
+        return not eq_result
+```
+
+Note that both these methods do not have a reverse counterpart, but we can exploit a similar trick when implementing the `__ne__` by calling back the `__eq__` operator. We have also to manage unexpected objects and return `NotImplemented` when needed.
+
+
+In-place operators
+------------------
+
+If a class does not implement the in-place operators, the augmented assignment operators are just syntactic sugar: `a += b` is evaluated exactly as `a = a + b`. That’s the expected behavior for immutable types, and if you have `__add__` then `+=` will work with no additional code. However, if you do implement an in-place operator method such as `__iadd__`, that method is called to compute the result of `a += b`. As the name says, those operators are expected to change the lefthand operand in place, and not create a new object as the result.
+
+The in-place special methods should never be implemented for immutable types like our `Vector` class. This is fairly obvious, but worth stating anyway.
 
