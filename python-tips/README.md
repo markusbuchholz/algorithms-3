@@ -12,6 +12,8 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 11](http://localhost:6419/python-tips/#chapter-11-interfaces-from-protocols-to-abcs): **Interfaces: From Protocols to ABCs.** Interfaces, defining and subclassing ABCs.
 - [Chapter 12](#chapter-12-inheritance-and-subclassing): **Inheritance and subclassing.** Subclassing buil-ins, multiple inheritance, Method Resolution Order (MRO).
 - [Chapter 13](#chapter-13-operator-overloading): **Operator Overloading.** Unary, rich comparison, and in-place operators.
+- [Chapter 14](#chapter-14-iterables-iterators-and-generators): **Iterables, Iterators, and Generators.**
+
 
 Chapter 2: Data Structures
 ===========================
@@ -1890,4 +1892,546 @@ In-place operators
 If a class does not implement the in-place operators, the augmented assignment operators are just syntactic sugar: `a += b` is evaluated exactly as `a = a + b`. That’s the expected behavior for immutable types, and if you have `__add__` then `+=` will work with no additional code. However, if you do implement an in-place operator method such as `__iadd__`, that method is called to compute the result of `a += b`. As the name says, those operators are expected to change the lefthand operand in place, and not create a new object as the result.
 
 The in-place special methods should never be implemented for immutable types like our `Vector` class. This is fairly obvious, but worth stating anyway.
+
+
+
+Chapter 14: Iterables, iterators, and generators
+================================================
+
+Every generator is an iterator: generators fully implement the iterator interface. But an iterator retrieves items from a collection, while a generator can produce items “out of thin air.” That’s why the Fibonacci sequence generator is a common example: an infinite series of numbers cannot be stored in a collection. However, be aware that the Python community treats iterator and generator as synonyms most of the time.
+
+Python 3 uses generators in many places. Even the `range()` built-in now returns a generator-like object instead of full-blown lists like before. If you must build a list from range , you have to be explicit e.g. `list(range(100))`.
+
+Iterables and Iterators
+------------------------
+
+**iterable:** any object from which the `iter` built-in function can obtain an iterator. Objects implementing an `__iter__` method returning an iterator are iterable. Sequences are always iterable; as are objects implementing a `__getitem__` method that takes 0-based indexes. Python obtains iterators from iterables. Here is a simple `for` loop iterating over a `str`. The `str` 'ABC' is the iterable here. You don’t see it, but there is an iterator behind the curtain:
+
+```python
+s = 'ABC'
+for char in s:
+    print(char)
+# A
+# B
+# C
+```
+
+The most accurate way to **check** whether an object `x` is iterable is to call `iter(x)` and handle a `TypeError` exception if it isn’t. This is more accurate than using `isinstance(x, abc.Iterable)`, because `iter(x)` also considers the legacy `__getitem__` method, while the Iterable ABC does not.
+
+**iterator:** any object that implements the `__next__` no-argument method that returns the next item in a series or raises `StopIteration` when there are no more items. Python iterators also implement the `__iter__` method so they are iterable as well. The standard interface has two methods:
+
+- `__next__` Returns the next available item, raising `StopIteration` when there are no more items.
+- `__iter__` Returns `self`; this allows iterators to be used where an iterable is expected, for example, in a for loop.
+
+
+The `StopIteration` signals that the iterator is exhausted. This exception is handled internally in for loops and other iteration contexts like list comprehensions, tuple unpacking, etc. Because the only methods required of an iterator are `__next__` and `__iter__`, there is no way to check whether there are remaining items, other than to call `next()` and catch `StopInteration`. Also, it’s not possible to “reset” an iterator. If you need to start over, you need to call `iter(...)` on the iterable that built the iterator in the first place. Calling `iter(...)` on the iterator itself won’t help, because `Iterator.__iter__` is implemented by returning `self`, so this will not reset a depleted iterator. 
+
+For instance, if we had to emulate the `for` machinery by hand with a `while` loop, this is what we’d have to write:
+
+```python
+s = 'ABC'
+it = iter(s) #
+while True:
+    try:
+        print(next(it))
+    except StopIteration:
+        del it
+        break
+
+# A
+# B
+# C
+```
+
+The best way to **check** if an object `x` is an iterator is to call `isinstance(x, abc.Iterator)`. Thanks to `Iterator.__subclasshook__`, this test works even if the class of `x` is not a real or virtual subclass of Iterator.
+
+
+**Example.** We’ll start our exploration of iterables by implementing a Sentence class: you give its constructor a string with some text, and then you can iterate *word by word*. The first version will implement the sequence protocol, and it’s iterable because all sequences are iterable, as we’ve seen before, but now we’ll see exactly why.
+
+```python
+import re
+import reprlib
+RE_WORD = re.compile('\w+')
+
+class Sentence:
+    def __init__(self, text):
+        self.text = text
+        self.words = RE_WORD.findall(text)
+        
+    def __getitem__(self, index):
+        return self.words[index]
+        
+    def __len__(self):
+        return len(self.words)
+        
+    def __repr__(self):
+        return 'Sentence(%s)' % reprlib.repr(self.text)
+```
+
+We can test this class:
+
+```python
+s = Sentence('"The time has come," the Walrus said,')
+s # Sentence('"The time ha... Walrus said,')
+
+for word in s:
+    print(word)
+    
+# The
+# time
+# has
+# come
+# the
+# Walrus
+# said
+
+s[5]
+# 'Walrus'
+
+list(s)
+# ['The', 'time', 'has', 'come', 'the', 'Walrus', 'said']
+```
+
+
+Why all sequences are iterable
+------------------------------
+
+Every Python programmer knows that sequences are iterable. Now we’ll see precisely why. Whenever the interpreter needs to iterate over an object `x`, it automatically calls `iter(x)`. The iter built-in function:
+
+1. Checks whether the object implements `__iter__`, and calls that to obtain an iterator.
+2. If `__iter__` is not implemented, but `__getitem__` is implemented, Python creates an iterator that attempts to fetch items in order, starting from index `0` (zero).
+3. If that fails, Python raises `TypeError`, usually saying `“C object is not iterable”` where `C` is the class of the target object. 
+
+That is why any Python sequence is iterable: they all implement `__getitem__`. In fact, the standard sequences also implement `__iter__`, and yours should too, because the special handling of `__getitem__` exists for backward compatibility reasons and may be gone in the future (although it is not deprecated as I write this).
+
+This is an extreme form of duck typing: an object is considered iterable not only when it implements the special method `__iter__`, but also when it implements `__getitem__`, as long as `__getitem__` accepts `int` keys starting from `0`. In the goose-typing approach, the definition for an iterable is simpler but not as flexible: an object is considered iterable if it implements the `__iter__` method. No subclassing or registration is required, because `abc.Iterable` implements the `__subclasshook__`. For example:
+
+```python
+class Foo:
+    def __iter__(self):
+        pass
+
+from collections import abc
+issubclass(Foo, abc.Iterable)
+# True
+
+f = Foo()
+isinstance(f, abc.Iterable)
+# True
+```
+
+Note that our initial `Sentence` class does not pass the `issubclass(Sentence, abc.Iterable)` test, even though it is iterable in practice. As we said, the most accurate way to check whether an object `x` is iterable is to call `iter(x)` and handle a `TypeError` exception.
+
+A common cause of errors in building iterables and iterators is to confuse the two. To
+be clear: 
+
+- iterables have an `__iter__` method that instantiates a new iterator every time.
+- Iterators implement a `__next__` method that returns individual items, and an `__iter__` method that returns `self`.
+
+Therefore, **iterators are also iterable, but iterables are not iterators**. To make clear the difference between iterable and iterator here is an implementation of both:
+
+```python
+class Sentence:
+    def __init__(self, text):
+        self.text = text
+        self.words = RE_WORD.findall(text)
+    def __iter__(self):
+        return SentenceIterator(self.words)
+        
+class SentenceIterator:
+    def __init__(self, words):
+        self.words = words
+        self.index = 0        
+    def __next__(self):
+        try:
+            word = self.words[self.index]
+        except IndexError:
+            raise StopIteration()
+        self.index += 1
+        return word
+    def __iter__(self):
+        return self
+```
+
+Note that implementing `__iter__` in `SentenceIterator` is not actually needed for this example to work, but the it’s the right thing to do: iterators are supposed to implement both `__next__` and `__iter__`, and doing so makes our iterator pass the `issubclass(SentenceInterator, abc.Iterator)` test. If we had subclassed `SentenceIterator` from `abc.Iterator`, we’d inherit the concrete `abc.Iterator.__iter__` method.
+
+Generators
+----------
+
+The generator object is in fact an iterator, with `__iter__` being a generator function. Any Python function that has the `yield` keyword in its body is a generator function: a function which, when called, returns a generator object. In other words, a generator
+function is a generator factory. The only syntax distinguishing a plain function from a generator function is the fact that the latter has a `yield` keyword somewhere in its body. Here is a very simple generator:
+
+```python
+def gen_123():
+    yield 1
+    yield 2
+    yield 3
+    
+gen_123
+# <function gen_123 at 0x...>
+
+for i in gen_123():
+    print(i)
+# 1
+# 2
+# 3
+
+g = gen_123()
+next(g)
+# 1
+next(g)
+# 2
+next(g)
+# 3
+next(g)
+#Traceback (most recent call last): StopIteration
+```
+
+Note that, when called as `gen_123` we see that `gen_123` is a function object. But when invoked, `gen_123()` returns a generator object. Generators are iterators that produce the values of the expressions passed to yield.
+For closer inspection, we assign the generator object to `g`. Because `g` is an iterator, calling `next(g)` fetches the next item produced by `yield`. When the body of the function completes, the generator object raises a `StopIteration`.
+
+I find it helpful to be strict when talking about the results obtained from a generator: I say that a generator yields or produces values. But it’s confusing to say a generator “returns” values. Functions return values. Calling a generator function returns a generator. A generator yields or produces values. A generator doesn’t “return” values in the usual way: the return statement in the body of a generator function causes `StopIteration` to be raised by the generator object
+
+We can modify our `Sentence` example to be a generator:
+
+```python
+import re
+import reprlib
+RE_WORD = re.compile('\w+')
+
+class Sentence:
+    def __init__(self, text):
+        self.text = text
+        self.words = RE_WORD.findall(text)
+    def __repr__(self):
+        return 'Sentence(%s)' % reprlib.repr(self.text)
+    def __iter__(self):
+        for word in self.words:
+            yield word
+            return
+```
+
+Let's focus on the `__iter__` method. The `__iter__` iterates over `self.word` and it yields the current word. Note that the `return` is not needed; the function can just “fall-through” and return automatically. Either way, a generator function doesn’t raise `StopIteration` it simply exits when it’s done producing values.
+
+
+```python
+def gen_AB():
+    print('start')
+    yield 'A'
+    print('continue')
+    yield 'B'
+    print('end.')
+
+g = gen_AB()
+next(g)
+# start
+# --> A
+next(g)
+# continue
+# --> B
+next(g)
+# end.
+next(g)
+# Traceback (most recent call last): StopIteration
+
+
+for c in gen_AB():
+    print('-->', c)
+
+# start
+# --> A
+# continue
+# --> B
+# end.
+```
+
+The first implicit call to `next()` in the for loop at the first `yield`, producing the value `'A'`. will print `'start'` and stop The second implicit call to `next()` in the for loop will print `'continue'` and stop at the second `yield`, producing the value `'B'`. The third call to `next()` will print `'end.'` and fall through the end of the function body, causing the generator object to raise `StopIteration`.
+
+
+Lazy vs eager
+-------------
+
+The Iterator interface is designed to be lazy: `next(my_iterator)` produces one item at a time. The opposite of lazy is eager. Note that lazy evaluation and eager evaluation are actual technical terms in programming language theory.
+
+Our Sentence implementations so far have not been lazy because the `__init__` eagerly builds a list of all words in the text, binding it to the `self.words` attribute. This will entail processing the entire text, and the list may use as much memory as the text itself. Most of this work will be in vain if the user only iterates over the first couple words. Whenever you are using Python 3 and start wondering “Is there a lazy way of doing this?”, often the answer is “Yes.”
+
+The `re.finditer` function is a lazy version of `re.findall` which, instead of a list, returns a generator producing `re.MatchObject` instances on demand. If there are many matches, `re.finditer` saves a lot of memory. Using it, our third version of Sentence is now lazy: it only produces the next word when it is needed.
+
+```python
+import re
+import reprlib
+RE_WORD = re.compile('\w+')
+
+class Sentence:
+    def __init__(self, text):
+        self.text = text
+    def __repr__(self):
+        return 'Sentence(%s)' % reprlib.repr(self.text)
+    def __iter__(self):
+        for match in RE_WORD.finditer(self.text):
+            yield match.group()
+```
+
+Generator expressions
+---------------------
+
+A generator expression can be understood as a lazy version of a list comprehension: it does not eagerly build a list, but returns a generator that will lazily produce the items on demand. In other words, if a list comprehension is a factory of lists, a generator
+expression is a factory of generators. Generator expressions are syntactic sugar: they can always be replaced by generator
+functions, but sometimes are more convenient. Let's consider our `Sentence` class and let's write a new `__iter__` method based on a generator expression:
+
+```python
+class Sentence:
+    def __init__(self, text):
+        self.text = text
+    def __repr__(self):
+        return 'Sentence(%s)' % reprlib.repr(self.text)
+    def __iter__(self):
+        return (match.group() for match in RE_WORD.finditer(self.text))
+```
+
+The `__iter__` method here is not a generator function since it has no `yield`, but uses a generator expression to build a generator and then returns it. The end result is the same: the caller of `__iter__` gets a generator object.
+
+In the following example the `gen_AB` generator function is used by a list comprehension, then by a generator expression:
+
+```python
+def gen_AB():
+    print('start')
+    yield 'A'
+    print('continue')
+    yield 'B'
+    print('end.')
+
+res1 = [x*3 for x in gen_AB()]
+# start
+# continue
+# end.
+
+for i in res1:
+    print('-->', i)
+# --> AAA
+# --> BBB
+```
+
+The list comprehension eagerly iterates over the items yielded by the generator object produced by calling `gen_AB()`: `'A'` and `'B'`. Note the output in the next lines: `start`, `continue`, `end`. The `for` loop is iterating over the `res1` list produced by the list comprehension.
+
+```python
+res2 = (x*3 for x in gen_AB())
+res2
+# <generator object <genexpr> at 0x10063c240>
+
+for i in res2:
+    print('-->', i)
+# start
+# --> AAA
+# continue
+# --> BBB
+# end.
+```
+
+The generator expression returns `res2`. The call to `gen_AB()` is made, but that call returns a generator, which is not consumed here. `res2` is a generator object. Only when the for loop iterates over `res2`, the body of `gen_AB` actually executes. Each iteration of the for loop implicitly calls `next(res2)`, advancing `gen_AB` to the next `yield`. Note the output of `gen_AB` with the output of the print in the `for` loop.
+
+
+Generator Functions in the Standard Library
+-------------------------------------------
+
+When implementing generators, know what is available in the standard library, otherwise there’s a good chance you’ll reinvent the wheel. That’s why the next section covers several ready-to-use generator functions.
+
+I summarize two dozen of them, from the built-in, itertools , and functools modules. For convenience, I grouped them by high-level functionality, regardless of where they are defined.
+
+**Filtering generator functions:** they yield a subset of items produced by the input iterable, without changing the items themselves. They take a predicate, which is a one-argument Boolean function that will be applied to each item in the input to determine whether the item is included in the output.
+
+<p align="center">
+<img src="./images/filtering_generators_standard_library.png" width="500">
+</p>
+
+```python
+def vowel(c):
+    return c.lower() in 'aeiou'
+
+list(filter(vowel, 'Aardvark'))
+# ['A', 'a', 'a']
+
+import itertools
+list(itertools.filterfalse(vowel, 'Aardvark'))
+# ['r', 'd', 'v', 'r', 'k']
+list(itertools.dropwhile(vowel, 'Aardvark'))
+# ['r', 'd', 'v', 'a', 'r', 'k']
+list(itertools.takewhile(vowel, 'Aardvark'))
+# ['A', 'a']
+list(itertools.compress('Aardvark', (1,0,1,1,0,1)))
+# ['A', 'r', 'd', 'a']
+list(itertools.islice('Aardvark', 4))
+# ['A', 'a', 'r', 'd']
+list(itertools.islice('Aardvark', 4, 7))
+# ['v', 'a', 'r']
+list(itertools.islice('Aardvark', 1, 7, 2))
+# ['a', 'd', 'a']
+```
+
+**Mapping generator functions:** they yield items computed from each individual item in the input iterable or iterables, in the case of `map` and `starmap`. If the input comes from more than one iterable, the output stops as soon as the first input iterable is exhausted.
+
+<p align="center">
+<img src="./images/mapping_generators_standard_library.png" width="500">
+</p>
+
+```python
+sample = [5, 4, 2, 8, 7, 6, 3, 0, 9, 1]
+
+import itertools
+list(itertools.accumulate(sample)) # Running sum
+# [5, 9, 11, 19, 26, 32, 35, 35, 44, 45]
+list(itertools.accumulate(sample, min)) # Running min
+# [5, 4, 2, 2, 2, 2, 2, 0, 0, 0]
+list(itertools.accumulate(sample, max)) # Running max
+# [5, 5, 5, 8, 8, 8, 8, 8, 9, 9]
+
+import operator
+list(itertools.accumulate(sample, operator.mul)) # Running product
+# [5, 20, 40, 320, 2240, 13440, 40320, 0, 0, 0] 
+list(itertools.accumulate(range(1, 11), operator.mul)) # Factorial 1! to 10!
+# [5, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800]
+```
+
+**Merging generator functions:** they yield items from multiple input iterables. `chain` and `chain.from_iterable` consume the input iterables sequentially (one after the other), while `product`, `zip`, and `zip_longest` consume the input iterables in parallel.
+
+<p align="center">
+<img src="./images/merging_generators_standard_library.png" width="500">
+</p>
+
+```python
+list(itertools.chain('ABC', range(2))) #
+# ['A', 'B', 'C', 0, 1]
+list(itertools.chain(enumerate('ABC'))) #
+# [(0, 'A'), (1, 'B'), (2, 'C')]
+list(itertools.chain.from_iterable(enumerate('ABC'))) #
+# [0, 'A', 1, 'B', 2, 'C']
+list(zip('ABC', range(5))) #
+# [('A', 0), ('B', 1), ('C', 2)]
+list(zip('ABC', range(5), [10, 20, 30, 40])) #
+# [('A', 0, 10), ('B', 1, 20), ('C', 2, 30)]
+list(itertools.zip_longest('ABC', range(5))) #
+# [('A', 0), ('B', 1), ('C', 2), (None, 3), (None, 4)]
+list(itertools.zip_longest('ABC', range(5), fillvalue='?'))
+# [('A', 0), ('B', 1), ('C', 2), ('?', 3), ('?', 4)]
+```
+
+**Expanding generator functions:** they expand the input by yielding more than one value per input item.
+
+<p align="center">
+<img src="./images/expanding_generators_standard_library.png" width="500">
+</p>
+
+```python
+ct = itertools.count()
+next(ct)
+# 0
+next(ct), next(ct), next(ct)
+# (1, 2, 3)
+
+list(itertools.islice(itertools.count(1, .3), 3))
+# [1, 1.3, 1.6]
+cy = itertools.cycle('ABC')
+next(cy)
+# 'A'
+list(itertools.islice(cy, 7))
+# ['B', 'C', 'A', 'B', 'C', 'A', 'B']
+
+rp = itertools.repeat(7)
+next(rp), next(rp)
+# (7, 7)
+list(itertools.repeat(8, 4))
+# [8, 8, 8, 8]
+list(map(operator.mul, range(11), itertools.repeat(5)))
+# [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+```
+
+**Rearranging generator functions:** they are designed to yield all items in the input iterables, but rearranged in some way. Here are two functions that return multiple generators: `itertools.groupby` and `itertools.tee`. The other generator function in this group, the `reversed` built-in, is the only one covered in this section that does not accept any iterable as input, but only sequences. This makes sense: because reversed will yield the items from last to first, it only works with a sequence with a known length. But it avoids the cost of making a reversed copy of the sequence by yielding each item as needed.
+
+<p align="center">
+<img src="./images/rearranging_generators_standard_library.png" width="500">
+</p>
+
+```python
+list(itertools.groupby('LLLLAAGGG'))
+# [('L', <itertools._grouper object at 0x102227cc0>),
+# ('A', <itertools._grouper object at 0x102227b38>),
+# ('G', <itertools._grouper object at 0x102227b70>)]
+
+for char, group in itertools.groupby('LLLLAAAGG'):
+    print(char, '->', list(group))
+# L -> ['L', 'L', 'L', 'L']
+# A -> ['A', 'A',]
+# G -> ['G', 'G', 'G']
+
+animals = ['duck', 'eagle', 'rat', 'giraffe', 'bear',
+'bat', 'dolphin', 'shark', 'lion']
+animals.sort(key=len)
+animals
+# ['rat', 'bat', 'duck', 'bear', 'lion', 'eagle', 'shark',
+# 'giraffe', 'dolphin']
+
+for length, group in itertools.groupby(animals, len):
+    print(length, '->', list(group))
+# 3 -> ['rat', 'bat']
+# 4 -> ['duck', 'bear', 'lion']
+# 5 -> ['eagle', 'shark']
+# 7 -> ['giraffe', 'dolphin']
+
+for length, group in itertools.groupby(reversed(animals), len):
+    print(length, '->', list(group))
+# 7 -> ['dolphin', 'giraffe']
+# 5 -> ['shark', 'eagle']
+# 4 -> ['lion', 'bear', 'duck']
+# 3 -> ['bat', 'rat']
+
+list(itertools.tee('ABC'))
+# [<itertools._tee object at 0x10222abc8>, <itertools._tee object at 0x10222ac08>]
+g1, g2 = itertools.tee('ABC')
+next(g1)
+# 'A'
+next(g2)
+# 'A'
+next(g2)
+# 'B'
+list(g1)
+# ['B', 'C']
+list(g2)
+# ['C']
+list(zip(*itertools.tee('ABC')))
+# [('A', 'A'), ('B', 'B'), ('C', 'C')]
+```
+
+Iterable Functions in the Standard Library
+-------------------------------------------
+
+**Folding iterable functions:** all take an iterable and return a single result. They are known as “reducing,” “folding,” or “accumulating” functions. Actually, every one of the built-ins listed here can be implemented with functools.reduce , but they exist as built-ins because they address some common use cases more easily. Also, in the case of `all` and `any`, there is an important optimization that can’t be done with `reduce`: these functions short-circuit (i.e., they stop consuming the iterator as soon as the result is determined).
+
+<p align="center">
+<img src="./images/folding_iterable_standard_library.png" width="500">
+</p>
+
+```python
+all([1, 2, 3])
+# True
+all([1, 0, 3])
+# False
+all([])
+# True
+any([1, 2, 3])
+# True
+any([1, 0, 3])
+# True
+any([0, 0.0])
+# False
+any([])
+# False
+g = (n for n in [0, 0.0, 7, 8])
+any(g)
+# True
+next(g)
+# 8
+```
+
+
+
 

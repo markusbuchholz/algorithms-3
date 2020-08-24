@@ -75,6 +75,7 @@ Machine Learning interviews
 
 Various guides for passing Machine Learning interviews:
 
-- Tips and Tricks [[readme]](./machine-learning/khangich/README.md)
+- Tips and Tricks [[readme]](./machine-learning/khangich/README.md) 
+- Common questions in interviews [[readme]](./machine-learning/feynman687/README.md)
 
 
