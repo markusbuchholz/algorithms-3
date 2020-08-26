@@ -12,8 +12,8 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 11](http://localhost:6419/python-tips/#chapter-11-interfaces-from-protocols-to-abcs): **Interfaces: From Protocols to ABCs.** Interfaces, defining and subclassing ABCs.
 - [Chapter 12](#chapter-12-inheritance-and-subclassing): **Inheritance and subclassing.** Subclassing buil-ins, multiple inheritance, Method Resolution Order (MRO).
 - [Chapter 13](#chapter-13-operator-overloading): **Operator Overloading.** Unary, rich comparison, and in-place operators.
-- [Chapter 14](#chapter-14-iterables-iterators-and-generators): **Iterables, Iterators, and Generators.**
-
+- [Chapter 14](#chapter-14-iterables-iterators-and-generators): **Iterables, Iterators, and Generators.** Iterables vs iterators, generators, sequences, lazy vs eager, standard library.
+- [Chapter 15](#chapter-15-context-managers-and-else-blocks): **Context Managers and else Blocks.** The else clause, with and context manager, the context manager decorator.
 
 Chapter 2: Data Structures
 ===========================
@@ -2431,6 +2431,181 @@ any(g)
 next(g)
 # 8
 ```
+
+Chapter 15: Context Managers and else Blocks
+============================================
+
+The `else` clause
+-----------------
+
+This is no secret, but it is an underappreciated language feature: the `else` clause can be used not only in if statements but also in `for`, `while`, and `try` statements. The semantics of `for/else`, `while/else`, and `try/else` are closely related, but very different from `if/else`. Initially the word `else` actually hindered my understanding of these features, but eventually I got used to it.
+
+In general, the `else` clause is skipped if an exception or a `return`, `break`, or `continue` statement causes control to jump out of the main block of the compound statement. For example:
+
+- **for** the else block will run only if and when the for loop runs to completion (i.e., not
+if the for is aborted with a break ).
+
+- **while** the else block will run only if and when the while loop exits because the condition
+became falsy (i.e., not when the while is aborted with a break).
+
+- **try** the else block will only run if no exception is raised in the try block. The official docs also state: “Exceptions in the else clause are not handled by the preceding except clauses.”
+
+
+Using `else` with these statements often makes the code easier to read and saves the trouble of setting up control flags or adding extra if statements. The use of `else` in loops generally follows the pattern of this snippet:
+
+
+```python
+for item in my_list:
+    if item.flavor == 'banana': break
+else:
+    raise ValueError('No banana flavor found!')
+```
+
+Coupling `else` with `try` is useful mainly for clarity:
+
+```python
+try:
+    dangerous_call()
+except OSError:
+    log('OSError...')
+else:
+    after_call()
+```
+
+The `after_call()` could stay inside the `try` condition without the `else` (just after `dangerous_call()`) but this would be less clear. Formally the `try` should encapsulate only the portion of code related to the possible exception.
+
+
+Context Managers and with Blocks
+---------------------------------
+
+The `with` statement sets up a temporary context and reliably tears it down, under the control of a context manager object. This prevents errors and reduces boilerplate code, making APIs at the same time safer and easier to use. Python programmers are finding lots of uses for `with` blocks beyond automatic file closing.
+
+Context manager objects exist to control a `with` statement, just like iterators exist to control a `for` statement.
+The `with` statement was designed to simplify the `try/finally` pattern, which guarantees that some operation is performed after a block of code, even if the block is aborted because of an exception, a return or `sys.exit()` call. The code in the finally clause usually releases a critical resource or restores some previous state that was temporarily changed.
+The context manager protocol consists of the `__enter__` and `__exit__` methods. At the start of the with, `__enter__` is invoked on the context manager object. The role of the finally clause is played by a call to `__exit__` on the context manager object at the end of the with block.
+
+```python
+with open('mirror.py') as fp:
+    src = fp.read(60)
+
+len(src)
+# 60
+fp
+# <_io.TextIOWrapper name='mirror.py' mode='r' encoding='UTF-8'>
+fp.closed, fp.encoding
+# (True, 'UTF-8')
+fp.read(60)
+# Traceback (most recent call last):
+# File "<stdin>", line 1, in <module>
+# ValueError: I/O operation on closed file.
+```
+
+In the example below the `fp` variable is still available. But you can’t perform `I/O` with `fp` because at the end of the `with` block, the `TextIOWrapper.__exit__` method is called and closes the file.
+
+
+```python
+class LookingGlass:
+    def __enter__(self):
+        import sys
+        self.original_write = sys.stdout.write
+        sys.stdout.write = self.reverse_write
+        return 'JABBERWOCKY'
+        
+    def reverse_write(self, text):
+        self.original_write(text[::-1])
+        
+    def __exit__(self, exc_type, exc_value, traceback):
+        import sys
+        sys.stdout.write = self.original_write
+        if exc_type is ZeroDivisionError:
+            print('Please DO NOT divide by zero!')
+            return True
+```
+
+(i) Python invokes `__enter__` with no arguments besides `self`. Hold the original `sys.stdout.write` method in an instance attribute for later use. Monkey-patch `sys.stdout.write`, replacing it with our own method. Return the `'JABBERWOCKY'` string just so we have something to put in the target variable what. (ii) The `reverse_write()` is our replacement to `sys.stdout.write` reverses the text argument and calls the original implementation. (iii) Python calls `__exit__` with `None`, if all went well; if an exception is raised, the three arguments get the exception data, as described next. It’s cheap to import modules again because Python caches them. Restore the original method to `sys.stdout.write`. If the exception is not `None` and its type is` ZeroDivisionError`, print a message and return `True` to tell the interpreter that the exception was handled. If `__exit__` returns `None` or anything but `True`, any exception raised in the with block will be propagated.
+
+```python
+from mirror import LookingGlass
+with LookingGlass() as what:
+    print('Alice, Kitty and Snowdrop')
+    print(what)
+    
+# pordwonS dna yttiK ,ecilA
+# YKCOWREBBAJ
+
+what
+#'JABBERWOCKY'
+
+print('Back to normal.')
+# Back to normal.
+```
+
+The context manager is an instance of `LookingGlass`; Python calls `__enter__` on the context manager and the result is bound to `what`. Print a `str`, then the value of the target variable `what`. The output of each print comes out backward. Now the with block is over. We can see that the value returned by `__enter__`, held in `what`, is the string `'JABBERWOCKY'`. Program output is no longer backward.
+
+To better understand the functioning of the context manager we run it without a `with` block:
+
+```python
+from mirror import LookingGlass
+
+manager = LookingGlass()
+manager
+# <mirror.LookingGlass object at 0x2a578ac>
+monster = manager.__enter__()
+monster == 'JABBERWOCKY'
+# eurT
+monster
+# 'YKCOWREBBAJ'
+manager
+# ca875a2x0 ta tcejbo ssalGgnikooL.rorrim<
+manager.__exit__(None, None, None)
+monster
+# 'JABBERWOCKY'
+```
+
+Instantiate and inspect the manager instance. Call the context manager `__enter__()` method and store result in `monster`.
+Now `monster` is the string `'JABBERWOCKY'`. The `True` identifier appears reversed as `eurT` because all output via `stdout` goes through the write method we patched in `__enter__`. Call `manager.__exit__` to restore previous `stdout.write`.
+
+
+Using the `@contextmanager` decorator
+------------------------------------
+
+The Python Standard Library provides the `contextlib` module which includes classes and other functions for context manager. For instance, the `@contextmanager` decorator reduces the boilerplate of creating a context manager: instead of writing a whole class with `__enter__`/`__exit__` methods, you just implement a generator with a single yield that should produce whatever you want the `__enter__` method to return. In a generator decorated with `@contextmanager`, `yield` is used to split the body of the function in two parts: everything before the `yield` will be executed at the beginning of the `while` block when the interpreter calls `__enter__`; the code after `yield` will run when `__exit__` is called at the end of the block.
+
+We can rewrite the looking glass example as a method instead of a class, using the `@contextmanager` decorator:
+
+```python
+@contextlib.contextmanager
+def looking_glass():
+    import sys
+    original_write = sys.stdout.write
+    
+    def reverse_write(text):
+        original_write(text[::-1])
+    
+    sys.stdout.write = reverse_write
+    yield 'JABBERWOCKY'
+    sys.stdout.write = original_write
+```
+
+Apply the contextmanager decorator. Preserve original `sys.stdout.write` method. Define custom `reverse_write` function; original_write will be available in the closure. Replace `sys.stdout.write` with `reverse_write`. Yield the value that will be bound to the target variable in the as clause of the `with` statement. This function pauses at the `yeld` while the body of the with executes. When control exits the with block in any way, execution continues after the `yield`; finally the original `sys.stdout.write` is restored.
+
+We can test the new method to verify that everything is similar to what has been showed before:
+
+```python
+from mirror_gen import looking_glass
+with looking_glass() as what:
+    print('Alice, Kitty and Snowdrop')
+    print(what)
+    
+# pordwonS dna yttiK ,ecilA
+# YKCOWREBBAJ
+what
+# 'JABBERWOCKY'
+```
+
+
+
+
 
 
 
