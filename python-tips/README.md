@@ -14,6 +14,7 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 13](#chapter-13-operator-overloading): **Operator Overloading.** Unary, rich comparison, and in-place operators.
 - [Chapter 14](#chapter-14-iterables-iterators-and-generators): **Iterables, Iterators, and Generators.** Iterables vs iterators, generators, sequences, lazy vs eager, standard library.
 - [Chapter 15](#chapter-15-context-managers-and-else-blocks): **Context Managers and else Blocks.** The else clause, with and context manager, the context manager decorator.
+- [Chapter 16](#chapter-16-coroutines): **Coroutines.** Four states, decorators, termination, return values, use of yeld from, use cases. 
 
 Chapter 2: Data Structures
 ===========================
@@ -2604,9 +2605,337 @@ what
 ```
 
 
+Chapter 16: Coroutines
+======================
+
+We find two main senses for the verb *“to yield”* in dictionaries: to produce or to give way. Both senses apply in Python when we use the `yield` keyword in a generator. A line such as `yield` item produces a value that is received by the caller of `next(...)`, and it also gives way, suspending the execution of the generator so that the caller may proceed until it’s ready to consume another value by invoking `next()` again. The caller pulls values from the generator.
+
+**Definition of coroutine:** a coroutine is syntactically like a generator: just a function with the `yield` keyword in its body. However, in a coroutine, `yield` usually appears on the right side of an expression (e.g., datum = `yield` ), and it may or may not produce a value. If there is no expression after the yield keyword, the generator yields `None`. The coroutine may receive data from the caller, which uses `.send(datum)` instead of `next(...)` to feed the coroutine. Usually, the caller pushes values into the coroutine.
+
+**Control flow:** it is even possible that no data goes in or out through the `yield` keyword. Regardless of the flow of data, `yield` is a control flow device that can be used to implement cooperative multitasking: each coroutine yields control to a central scheduler so that other coroutines can be activated.
+
+**The yeld behaviour:** it’s crucial to understand that the execution of the coroutine is suspended exactly at the `yield` keyword. As mentioned before, in an assignment statement, the code to the right of the `=` is evaluated before the actual assignment happens. This means that in a line like `b = yield a`, the value of `b` will only be set when the coroutine is activated later by the client code. It takes some effort to get used to this fact, but understanding it is essential to make sense of the use of `yield` in asynchronous programming, as we’ll see later.
+
+**Example:**
+
+```python
+def simple_coroutine():
+    print('-> coroutine started')
+    x = yield
+    print('-> coroutine received:', x)
+
+my_coro = simple_coroutine()
+my_coro
+# <generator object simple_coroutine at 0x100c2be10>
+next(my_coro)
+# -> coroutine started
+my_coro.send(42)
+# -> coroutine received: 42
+# Traceback (most recent call last): StopIteration
+```
+
+A coroutine is defined as a generator function: with `yield` in its body. When the coroutine is designed just to receive data from the client it yields `None`, this is implicit because there is no expression to the right of the `yield` keyword. As usual with generators, you call the function to get a generator object back. The first call is `next(...)` because the generator hasn’t started so it’s not waiting in a `yield` and we can’t send it any data initially. The `send(42)` call makes the `yield` in the coroutine body evaluate to `42`; now the coroutine resumes and runs until the next `yield` or termination. In this case, control flows off the end of the coroutine body, which prompts the generator machinery to raise `StopIteration`, as usual.
+
+The four states of a coroutine
+-------------------------------
+
+A coroutine can be in one of four states. You can determine the current state using the `inspect.getgeneratorstate(...)` function, which returns one of these strings:
+
+- 'GEN_CREATED' Waiting to start execution.
+- 'GEN_RUNNING' Currently being executed by the interpreter.
+- 'GEN_SUSPENDED' Currently suspended at a yield expression.
+- 'GEN_CLOSED' Execution has completed.
+
+Because the argument to the send method will become the value of the pending `yield` expression, it follows that you can only make a call like`my_coro.send(42`) if the coroutine is currently suspended. But that’s not the case if the coroutine has never been activated when its state is 'GEN_CREATED'. That’s why the first activation of a coroutine is always done with `next(my_coro)` or call `my_coro.send(None)`, the effect is the same.
+
+**Example:**
+
+```python
+def simple_coro2(a):
+    print('-> Started: a =', a)
+    b = yield a
+    print('-> Received: b =', b)
+    c = yield a + b
+    print('-> Received: c =', c)
+
+my_coro2 = simple_coro2(14)
+from inspect import getgeneratorstate
+getgeneratorstate(my_coro2)
+# 'GEN_CREATED'
+next(my_coro2)
+# -> Started: a = 14
+# 14
+getgeneratorstate(my_coro2)
+# 'GEN_SUSPENDED'
+my_coro2.send(28)
+# -> Received: b = 28
+# 42
+my_coro2.send(99)
+# -> Received: c = 99
+# Traceback (most recent call last): File "<stdin>", line 1, in <module> StopIteration
+getgeneratorstate(my_coro2)
+# 'GEN_CLOSED'
+```
+
+**Example (advanced):**
+
+```python
+def averager():
+    total = 0.0
+    count = 0
+    average = None
+    while True:
+        term = yield average
+        total += term
+        count += 1
+        average = total/count
+        
+coro_avg = averager()
+next(coro_avg)
+coro_avg.send(10)
+# 10.0
+coro_avg.send(30)
+# 20.0
+coro_avg.send(5)
+# 15.0
+```
+
+This infinite loop means this coroutine will keep on accepting values and producing results as long as the caller sends them. This coroutine will only terminate when the caller calls `.close()` on it, or when it’s garbage collected because there are no more references to it. The `yield` statement here is used to suspend the coroutine, produce a result to the caller, and—later—to get a value sent by the caller to the coroutine, which resumes its infinite loop.
 
 
+Decorators for Coroutine Priming
+--------------------------------
+
+You can’t do much with a coroutine without priming it: we must always remember to call `next(my_coro)` before `my_coro.send(x)`. To make coroutine usage more convenient, a priming decorator is sometimes used.
+
+```python
+from functools import wraps
+def coroutine(func):
+    """Decorator: primes `func` by advancing to first `yield`"""
+    @wraps(func)
+    def primer(*args,**kwargs):
+        gen = func(*args,**kwargs)
+        next(gen)
+        return gen
+    return primer
+```
+
+The decorated generator function is replaced by this primer function which, when invoked, returns the primed generator. Call the decorated function to get a generator object. Prime the generator. Return it.
+
+```python
+from coroutil import coroutine
+
+@coroutine
+def averager():
+    total = 0.0
+    count = 0
+    average = None
+    while True:
+        term = yield average
+        total += term
+        count += 1
+        average = total/count
+```
+
+Call `averager()`, creating a generator object that is primed inside the primer function of the coroutine decorator. `getgeneratorstate` reports `GEN_SUSPENDED`, meaning that the coroutine is ready to receive a value. You can immediately start sending values to `coro_avg`: that’s the point of the decorator. Import the coroutine decorator. Apply it to the `averager()` function. The body of the function is exactly the same as before.
 
 
+Coroutine Termination and Exception Handling
+-------------------------------------------
+
+Since Python 2.5, generator objects have two methods that allow the client to explicitly
+send exceptions into the coroutine `throw` and `close`:
+
+- `generator.throw(exc_type[, exc_value[, traceback]])` causes the yield expression where the generator was paused to raise the exception given. If the exception is handled by the generator, flow advances to the next `yield`, and the value yielded becomes the value of the `generator.throw` call. If the exception is not handled by the generator, it propagates to the context of the caller.
+- `generator.close()` causes the `yield` expression where the generator was paused to raise a `GeneratorExit` exception. No error is reported to the caller if the generator does not handle that exception or raises `StopIteration` usually by running to completion. When receiving a `GeneratorExit`, the generator must not yield a value, otherwise a `RuntimeErro`r is raised. If any other exception is raised by the generator, it propagates to the caller.
+
+
+```python
+class DemoException(Exception):
+"""An exception type for the demonstration."""
+
+def demo_exc_handling():
+    print('-> coroutine started')
+    while True:
+        try:
+            x = yield
+        except DemoException:
+            print('*** DemoException handled. Continuing...')
+        else:
+            print('-> coroutine received: {!r}'.format(x))
+    raise RuntimeError('This line should never run.')
+```
+
+The last line is unreachable because the infinite loop can only be aborted with an unhandled exception, and that terminates the coroutine immediately.
+
+```python
+exc_coro = demo_exc_handling()
+next(exc_coro)
+# -> coroutine started
+exc_coro.send(11)
+# -> coroutine received: 11
+exc_coro.send(22)
+# -> coroutine received: 22
+exc_coro.close()
+from inspect import getgeneratorstate
+getgeneratorstate(exc_coro)
+# 'GEN_CLOSED'
+```
+
+If the `DemoException` is thrown into the coroutine, it’s handled and the `demo_exc_handling` coroutine continues, as in this example:
+
+```python
+exc_coro = demo_exc_handling()
+next(exc_coro)
+# coroutine started
+exc_coro.send(11)
+# coroutine received: 11
+exc_coro.throw(DemoException)
+# *** DemoException handled. Continuing...
+getgeneratorstate(exc_coro)
+# 'GEN_SUSPENDED'
+```
+
+On the other hand, if an unhandled exception is thrown into the coroutine, it stops—
+its state becomes 'GEN_CLOSED' as follows:
+
+```python
+exc_coro = demo_exc_handling()
+next(exc_coro)
+# -> coroutine started
+exc_coro.send(11)
+# -> coroutine received: 11
+exc_coro.throw(ZeroDivisionError)
+# Traceback (most recent call last): ... ZeroDivisionError
+getgeneratorstate(exc_coro)
+# 'GEN_CLOSED'
+```
+
+Returning a Value from a Coroutine
+------------------------------------
+
+Some coroutines do not yield anything interesting, but are designed to return a value at the end, often the result of some accumulation.
+
+```python
+def averager():
+    total = 0.0
+    count = 0
+    average = None
+    while True:
+        term = yield
+        if term is None: break
+        total += term
+        count += 1
+        average = total/count
+    return Result(count, average)
+    
+coro_avg = averager()
+next(coro_avg)
+coro_avg.send(10)
+coro_avg.send(30)
+coro_avg.send(6.5)
+coro_avg.send(None)
+# Traceback (most recent call last): ... StopIteration: Result(count=3, average=15.5)
+```
+
+In order to return a value, a coroutine must terminate normally; this is why this version of averager has a condition to `break` out of its accumulating loop. Return a `namedtuple` with the `count` and `average`. Before Python 3.3, it was a syntax error to return a value in a generator function. Sending `None` terminates the loop, causing the coroutine to end by returning the result. As usual, the generator object raises `StopIteration`. The value attribute of the exception carries the value returned.
+
+It is possible to catch the value returned by the coroutine using execption handling:
+
+```python
+coro_avg = averager()
+next(coro_avg)
+coro_avg.send(10)
+coro_avg.send(30)
+coro_avg.send(6.5)
+try:
+    coro_avg.send(None)
+except StopIteration as exc:
+    result = exc.value
+
+result
+# Result(count=3, average=15.5)
+```
+
+Using yield from
+----------------
+
+The first thing to know about `yield from` is that it is a completely new language construct. It does so much more than `yield` that the reuse of that keyword is arguably misleading. Similar constructs in other languages are called *await*, and that is a much better name because it conveys a crucial point: when a generator gen calls yield from `subgen()`, the subgen takes over and will yield values to the caller of gen ; the caller will in effect drive subgen directly. Meanwhile gen will be blocked, waiting until subgen terminates.
+
+The main feature of `yield from` is to open a bidirectional channel from the outermost caller to the innermost `subgenerator`, so that values can be sent and yielded back and forth directly from them, and exceptions can be thrown all the way in without adding a lot of exception handling boilerplate code in the intermediate coroutines. This is what enables coroutine delegation in a way that was not possible before.
+
+- **delegating generator:** the generator function that contains the yield from `<iterable>` expression.
+- **subgenerator:** the generator obtained from the `<iterable>` part of the `yield from` expression.
+
+Here we will see just some basic examples of the `yeld from` machinery, but non-trivial use cases are possible.
+
+```python
+def gen():
+    for c in 'AB':
+        yield c
+    for i in range(1, 3):
+        yield i
+
+list(gen())
+# ['A', 'B', 1, 2]
+```
+
+The code above can be rewritten as follows:
+
+```python
+def gen():
+    yield from 'AB'
+    yield from range(1, 3)
+
+list(gen())
+# ['A', 'B', 1, 2]
+```
+
+It is possible to chain iterables with yield from:
+
+```python
+def chain(*iterables):
+    for it in iterables:
+        yield from it
+
+s = 'ABC'
+t = tuple(range(3))
+list(chain(s, t))
+# ['A', 'B', 'C', 0, 1, 2]
+```
+
+
+Use cases
+---------
+
+Coroutines are the fundamental building block of the `asyncio` package. A simulation shows how to implement concurrent activities using coroutines instead of threads and this will greatly help when we tackle `asyncio` later on.
+
+A **discrete event simulation (DES)** is a type of simulation where a system is modeled as a sequence of events. In a DES, the simulation “clock” does not advance by fixed increments, but advances directly to the simulated time of the next modeled event. For ex‐ ample, if we are simulating the operation of a taxi cab from a high-level perspective, one event is picking up a passenger, the next is dropping the passenger off. It doesn’t matter if a trip takes 5 or 50 minutes: when the drop off event happens, the clock is updated to the end time of the trip in a single operation. The following code shows how it would be possible to track a group of taxis. Each taxi can pick-up and drop-off passengers and they can do it in parallel. Using coroutines it is possible to keep track of each taxi activity. We can run the DES simulation instantly without waiting for the wall-clock time required for a taxi to leave and find a passanger.
+
+```python
+def taxi_process(ident, trips, start_time=0):
+    """Yield to simulator issuing event at each state change"""
+    time = yield Event(start_time, ident, 'leave garage')
+    for i in range(trips):
+        time = yield Event(time, ident, 'pick up passenger')
+        time = yield Event(time, ident, 'drop off passenger')
+    yield Event(time, ident, 'going home')
+    # end of taxi process
+```
+
+`taxi_process` will be called once per taxi, creating a generator object to represent its operations. `ident` is the number of the taxi (e.g., 0, 1, 2 in the sample run); `trips` is the number of trips this taxi will make before going home; `start_time` is when the taxi leaves the garage. The first Event yielded is `'leave garage'`. This suspends the coroutine, and lets the simulation main loop proceed to the next scheduled event. When it’s time to reactivate this process, the main loop will send the current simulation time, which is assigned to time. This block will be repeated once for each trip. An `Event` signaling passenger `pick up` is yielded. The coroutine pauses here. When the time comes to reactivate this coroutine, the main loop will again send the current time. An `Event` signaling passenger `drop off` is yielded. The coroutine is suspended again, waiting for the main loop to send it the time of when it’s reactivated. The for loop ends after the given number of trips, and a final `'going home'` event is yielded. The coroutine will suspend for the last time. When reactivated, it will be sent the time from the simulation main loop, but here I don’t assign it to any variable because it will not be used. When the coroutine falls off the end, the generator object raises `StopIteration`.
+
+Running this code for multiple taxis will lead to something like:
+
+```python
+taxi 0: Event(start_time, ident, 'leave garage')
+taxi 0: Event(time, ident, 'pick up passenger')
+taxi 1: Event(start_time, ident, 'leave garage')
+taxi 2: Event(start_time, ident, 'leave garage') 
+taxi 1: Event(time, ident, 'pick up passenger')
+taxi 0: Event(time, ident, 'drop off passenger')
+...
+taxi 0: Event(time, ident, 'going home')
+```
 
 
