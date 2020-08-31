@@ -14,7 +14,8 @@ This file contains my personal notes of the excellent book *"Fluent Python", Ram
 - [Chapter 13](#chapter-13-operator-overloading): **Operator Overloading.** Unary, rich comparison, and in-place operators.
 - [Chapter 14](#chapter-14-iterables-iterators-and-generators): **Iterables, Iterators, and Generators.** Iterables vs iterators, generators, sequences, lazy vs eager, standard library.
 - [Chapter 15](#chapter-15-context-managers-and-else-blocks): **Context Managers and else Blocks.** The else clause, with and context manager, the context manager decorator.
-- [Chapter 16](#chapter-16-coroutines): **Coroutines.** Four states, decorators, termination, return values, use of yeld from, use cases. 
+- [Chapter 16](#chapter-16-coroutines): **Coroutines.** Four states, decorators, termination, return values, use of yeld from, use cases.
+- [Chapter 17](#chapter-17-concurrency-with-futures): **Concurrency with Futures.** What are futures? Managing the executor map. Examples.
 
 Chapter 2: Data Structures
 ===========================
@@ -2937,5 +2938,235 @@ taxi 0: Event(time, ident, 'drop off passenger')
 ...
 taxi 0: Event(time, ident, 'going home')
 ```
+
+Chapter 17: Concurrency with Futures
+======================================
+
+
+This chapter focuses on the `concurrent.futures` library introduced in Python 3.2. The “futures” objects represent the asynchronous execution of an operation. This powerful idea is the foundation not only of `concurrent.futures` but also of the `asyncio` package.
+
+**Example:** to handle network I/O efficiently, you need concurrency, as it involves high latency, so instead of wasting CPU cycles waiting, it’s better to do something else until a response comes back from the network. As an example we consider three simple programs to download images of 20 country flags from the Web. The first one, flags.py, runs sequentially: it only requests the next image when the previous one is downloaded and saved to disk. The other two scripts make concurrent downloads: they request all images practically at the same time, and save the files as they arrive. The `flags_threadpool.py` script uses the `concurrent.futures` package, while `flags_asyncio.py` uses `asyncio`.
+
+The `requests` library by Kenneth Reitz is available on PyPI and is more powerful and easier to use than the `urllib.request` module from the Python 3 standard library. In fact, requests is considered a model Pythonic API. It is also compatible with Python 2.6 and up, while the `urllib2` from Python 2 was moved and renamed in Python 3, so it’s more convenient to use `requests` regardless of the Python version you’re targeting.
+
+```python
+import os
+import time
+import sys
+
+# By convention non-standard libraries like `requests`
+# are imported separately from the other after one empty line.
+import requests 
+
+POP20_CC = ('CN IN US ID BR PK NG BD RU JP MX PH VN ET EG DE IR TR CD FR').split()
+BASE_URL = 'http://flupy.org/data/flags'
+DEST_DIR = 'downloads/'
+
+def save_flag(img, filename):
+    """Save the img (a byte sequence) to filename in the DEST_DIR ."""
+    path = os.path.join(DEST_DIR, filename)
+    with open(path, 'wb') as fp:
+    fp.write(img)
+
+def get_flag(cc):
+    """Given a country code, build the URL and download the image,
+    returning the binary contents of the response."""
+    url = '{}/{cc}/{cc}.gif'.format(BASE_URL, cc=cc.lower())
+    resp = requests.get(url)
+    return resp.content
+    
+def show(text):
+    """Display a string and flush sys.stdout so we can see progress in a one-line display; 
+    this is needed because Python normally waits for a line break to flush the stdout buffer"""
+    print(text, end=' ')
+    sys.stdout.flush()
+
+def download_many(cc_list):
+    for cc in sorted(cc_list):
+        image = get_flag(cc)
+        show(cc)
+        save_flag(image, cc.lower() + '.gif')
+    return len(cc_list)
+
+def main(download_many):
+    t0 = time.time()
+    count = download_many(POP20_CC)
+    elapsed = time.time() - t0
+    msg = '\n{} flags downloaded in {:.2f}s'
+    print(msg.format(count, elapsed))
+
+if __name__ == '__main__': main(download_many)
+```
+
+If we run the script above we will get all the flags in ~7 seconds:
+
+```
+python3 flags.py
+20 flags downloaded in 7.26s
+```
+
+Downloading with `concurrent.futures`
+------------------------------------
+
+The main features of the `concurrent.futures` package are the `ThreadPoolExecutor` and `ProcessPoolExecutor` classes, which implement an interface that allows you to submit callables for execution in different threads or processes, respectively. The interface is very high level and we don’t need to know about any of those details for a simple use case. If `futures.ThreadPoolExecutor` is not flexible enough for a certain job, you may need to build your own solution out of basic threading components such as `Thread`, `Lock`, `Semaphore`, etc.  possibly using the thread-safe queues of the `queue` module for passing data between threads. Those moving parts are encapsulated by `futures.ThreadPoolExecutor`.
+
+We can rewrite the sequential flag-downloader using `concurrent.futures`. We will recycle the code used for the sequential downloader, this is a common refactoring when writing concurrent code: turning the body of a sequential for loop into a function to be called concurrently.
+
+```python
+from concurrent import futures
+from flags import save_flag, get_flag, show, main
+MAX_WORKERS = 20
+
+def download_one(cc):
+    image = get_flag(cc)
+    show(cc)
+    save_flag(image, cc.lower() + '.gif')
+    return cc
+
+def download_many(cc_list):
+    workers = min(MAX_WORKERS, len(cc_list))
+    with futures.ThreadPoolExecutor(workers) as executor:
+        res = executor.map(download_one, sorted(cc_list))
+    return len(list(res))
+
+if __name__ == '__main__': main(download_many)
+```
+
+Reuse some functions from the flags module developed in the previous section. We set `MAX_WORKERS` as the maximum number of threads to be used in the `ThreadPoolExecutor`. The `download_one()` is a function to download a single image; this is what each thread will execute. In `download_many()` we first set the number of worker threads: use the smaller number between the maximum we want to allow `( MAX_WORKERS )` and the actual items to be processed, so no unnecessary threads are created. Secondly, we instantiate the `ThreadPoolExecutor` with that number of worker threads; the `executor.__exit__` method will call `executor.shutdown(wait=True)`, which will block until all threads are done. The `map` method is similar to the `map` built-in, except that the `download_one()` function will be called concurrently from multiple threads; it returns a generator that can be iterated over to retrieve the value returned by each function.
+
+Where Are the Futures?
+----------------------
+
+Futures are essential components in the internals of `concurrent.futures` and of `asyncio`, but as users of these libraries we sometimes don’t see them. The flag-downloader leverages futures behind the scenes, does not touch them directly. This section is an overview of futures, with an example that shows them in action.
+
+As of Python 3.4, there are two classes named Future in the standard library: `concurrent.futures.Future` and `asyncio.Future`. They serve the same purpose: an instance of either `Future` class represents a deferred computation that may or may not have completed. Futures encapsulate pending operations so that they can be put in queues, their state of completion can be queried, and their results (or exceptions) can be retrieved when available. 
+
+An important thing to know about futures in general is that you and I should not create them: they are meant to be instantiated exclusively by the concurrency framework, be it `concurrent.futures` or `asyncio`. A Future represents something that will eventually happen, and the only way to be sure that something will happen is to schedule its execution. Therefore, `concurrent.futures.Future` instances are created only as the result of scheduling something for execution with a `concurrent.futures.Executor` subclass. For example, the `Executor.submit()` method takes a callable, schedules it to run, and returns a future. Client code is not supposed to change the state of a future: the concurrency framework changes the state of a future when the computation it represents is done, and we can’t control when that happens.
+
+Both types of `Future` have a `.done()` method that is nonblocking and returns a `Boolean`
+that tells you whether the callable linked to that future has executed or not. Instead of
+asking whether a future is done, client code usually asks to be notified. That’s why both
+`Future` classes have an `.add_done_callback()` method: you give it a callable, and the
+callable will be invoked with the future as the single argument when the future is done.
+There is also a `.result()` method, which works the same in both classes when the future
+is done: it returns the result of the callable, or re-raises whatever exception might have
+been thrown when the callable was executed. However, when the future is not done, the
+behavior of the result method is very different between the two flavors of `Future`. In
+a `concurrency.futures.Future` instance, invoking `f.result()` will block the caller’s
+thread until the result is ready. An optional timeout argument can be passed, and if the
+future is not done in the specified time, a `TimeoutError` exception is raised. In `“asyncio.Future: Nonblocking by Design”`, we’ll see that the `asyncio.Future.result` method does not support timeout, and the preferred way to get the result of futures in that library is to use `yield from` which doesn’t work with `concurrency.futures.Future` instances.
+Several functions in both libraries return futures; others use them in their implementation in a way that is transparent to the user. An example of the latter is the `Executor.map` we saw before: it returns an iterator in which `__next__` calls the
+result method of each future, so what we get are the results of the futures, and not the
+futures themselves.
+
+To get a practical look at futures, we can rewrite previous code to use the `concurrent.futures.as_completed` function, which takes an iterable of futures and returns an iterator that yields futures as they are done.
+Using `futures.as_completed` requires changes to the `download_many()` function only.
+The higher-level `executor.map` call is replaced by two for loops: one to create and
+schedule the futures, the other to retrieve their results. While we are at it, we’ll add a
+few print calls to display each future before and after it’s done. 
+
+The code for `download_many()` grew in size, but now we get to inspect the mysterious futures.
+
+
+```python
+def download_many(cc_list):
+    cc_list = cc_list[:5]
+    with futures.ThreadPoolExecutor(max_workers=3) as executor:
+        to_do = []
+        for cc in sorted(cc_list):
+            future = executor.submit(download_one, cc)
+            to_do.append(future)
+            msg = 'Scheduled for {}: {}'
+            print(msg.format(cc, future))
+        results = []
+        for future in futures.as_completed(to_do):
+            res = future.result()
+            msg = '{} result: {!r}'
+            print(msg.format(future, res))
+            results.append(res)
+    return len(results)
+```
+
+For this demonstration, use only the top five most populous countries slicing by `cc_list[:5]`. Hardcode `max_workers` to 3 so we can observe pending futures in the output. The `for cc in sorted(cc_list)` iterates over country codes alphabetically, to make it clear that results arrive out of order. The `executor.submit` schedules the callable to be executed, and returns a future representing this pending operation. The `to_do.append(future)` store each future so we can later retrieve them with `as_completed`. with `print(msg.format(cc, future))` we display a message with the country code and the respective future. In `for future in futures.as_completed(to_do)` the `as_completed` yields futures as they are completed. The `res = future.result()` gets the result of this future then display the future and its result in the `print`. Note that the `future.result()` call will never block in this example because the future is coming out of `as_completed`.
+
+Running the script with the new `download_many()` function will produce an output that is similar to this one (order can vary because of random parallel execution):
+
+```
+Scheduled for BR: <Future at 0x100791518 state=running>
+Scheduled for CN: <Future at 0x100791710 state=running>
+Scheduled for ID: <Future at 0x100791a90 state=running>
+Scheduled for IN: <Future at 0x101807080 state=pending>
+Scheduled for US: <Future at 0x101807128 state=pending>
+CN <Future at 0x100791710 state=finished returned str> result: 'CN'
+BR ID <Future at 0x100791518 state=finished returned str> result: 'BR'
+<Future at 0x100791a90 state=finished returned str> result: 'ID'
+IN <Future at 0x101807080 state=finished returned str> result: 'IN'
+US <Future at 0x101807128 state=finished returned str> result: 'US'
+```
+
+Experimenting with `Executor.map`
+-------------------------------
+
+The `Executor.map` function from `futures.ThreadPoolExecutor` is easy to use but it has a feature that may or may not be helpful, depending on your needs: it **returns the results exactly in the same order** as the calls are started: if the first call takes 10s to produce a result, and the others take 1s each, your code will block for 10s as it tries to retrieve the first result of the generator returned by map. After that, you’ll get the remaining results without blocking because they will be done. That’s OK when you must have all the results before proceeding, but often it’s preferable to get the results as they are ready, regardless of the order they were submitted. To do that, you need a combination of the `Executor.submit` method and the `futures.as_completed` function as we saw in previous examples.
+
+The combination of `executor.submit` and `futures.as_completed` is more flexible than `executor.map` because you can submit different callables and arguments, while `executor.map` is designed to run the same callable on the different arguments. In addition, the set of futures you pass to `futures.as_completed` may come from more than one executor, perhaps some were created by a `ThreadPoolExecutor` instance while others are from a `ProcessPoolExecutor`.
+
+Here, for learning purposes we see the ordered execution of `Executor.map` without using `executor.submit` and `futures.as_completed`.
+
+```python
+from time import sleep, strftime
+from concurrent import futures
+
+def display(*args):
+    print(strftime('[%H:%M:%S]'), end=' ')
+    print(*args)
+
+def loiter(n):
+    msg = '{}loiter({}): doing nothing for {}s...'
+    display(msg.format('\t'*n, n, n))
+    sleep(n)
+    msg = '{}loiter({}): done.'
+    display(msg.format('\t'*n, n))
+    return n * 10
+    
+def main():
+    display('Script starting.')
+    executor = futures.ThreadPoolExecutor(max_workers=3)
+    results = executor.map(loiter, range(5))
+    display('results:', results) # .
+    display('Waiting for individual results:')
+    for i, result in enumerate(results):
+    display('result {}: {}'.format(i, result))
+```
+
+Running the script we will get something like this:
+
+```
+$ python3 demo_executor_map.py
+[15:56:50] Script starting.
+[15:56:50] loiter(0): doing nothing for 0s...
+[15:56:50] loiter(0): done.
+[15:56:50] loiter(1): doing nothing for 1s...
+[15:56:50] loiter(2): doing nothing for 2s...
+[15:56:50] results: <generator object result_iterator at 0x106517168>
+[15:56:50] loiter(3): doing nothing for 3s...
+[15:56:50] Waiting for individual results:
+[15:56:50] result 0: 0
+[15:56:51] loiter(1): done.
+[15:56:51] loiter(4): doing nothing for 4s...
+[15:56:51] result 1: 10
+[15:56:52] loiter(2): done.
+[15:56:52] result 2: 20
+[15:56:53] loiter(3): done.
+[15:56:53] result 3: 30
+[15:56:55] loiter(4): done.
+[15:56:55] result 4: 40
+```
+
+This run started at `15:56:50`. The first thread executes `loiter(0)`, so it will sleep for 0s and return even before the second thread has a chance to start. `loiter(1)` and `loiter(2)` start immediately (because the thread pool has three workers, it can run three functions concurrently). The results returned by `executor.map` is a `generator`; nothing so far would block, regardless of the number of tasks and the `max_workers` setting. Because `loiter(0)` is done, the first worker is now available to start the fourth thread for `loiter(3)`. This is where execution may block, depending on the parameters given to the loiter calls: the `__next__` method of the results generator must wait until the first future is complete. In this case, it won’t block because the call to `loiter(0)` finished before this loop started. Note that everything up to this point happened within the same second: `15:56:50`. `loiter(1)` is done one second later, at `15:56:51`. The thread is freed to start `loiter(4)`. The result of `loiter(1)` is shown: 10. Now the for loop will block waiting for the result of `loiter(2)`. The pattern repeats: `loiter(2)` is done, its result is shown; same with `loiter(3)`. There is a 2s delay until `loiter(4)` is done, because it started at `15:56:51` and did nothing for 4s.
+
+
+
+
 
 
